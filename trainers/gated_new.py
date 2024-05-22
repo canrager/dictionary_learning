@@ -3,9 +3,9 @@ Combines gated SAEs with Anthropic's training scheme from their April update
 """
 import torch as t
 import torch.nn.init as init
-from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
-from ..dictionary import GatedAutoEncoder
+from trainer import SAETrainer
+from dictionary_learning.config import DEBUG
+from dictionary_learning.dictionary import GatedAutoEncoder
 from collections import namedtuple
 
 

@@ -2,9 +2,9 @@
 Implements the standard SAE training scheme.
 """
 import torch as t
-from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
-from ..dictionary import AutoEncoder
+from trainer import SAETrainer
+from dictionary_learning.config import DEBUG
+from dictionary_learning.dictionary import AutoEncoder
 from collections import namedtuple
 
 class ConstrainedAdam(t.optim.Adam):

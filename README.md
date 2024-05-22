@@ -11,6 +11,7 @@ Navigate to the to the location where you would like to clone this repo, clone a
 git clone https://github.com/saprmarks/dictionary_learning
 cd dictionary_learning
 pip install -r requirements.txt
+pip install -e .
 ```
 
 To use `dictionary_learning`, include it as a subdirectory in some project's directory and import it; see the examples below.

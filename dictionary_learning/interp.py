@@ -6,6 +6,7 @@ from collections import namedtuple
 import umap
 import pandas as pd
 import plotly.express as px
+import torch
 
 TRACER_KWARGS = {"scan" : False, "validate" : False}
 
@@ -74,7 +75,7 @@ def feature_effect(
     top_probs, top_tokens = t.topk(diff.mean(dim=0), k=k, largest=largest)
     return top_tokens, top_probs
 
-
+@torch.inference_mode()
 def examine_dimension(model, submodule, buffer, dictionary=None, max_length=128, n_inputs=512,
                       dim_idx=None, k=30):
     
@@ -128,7 +129,7 @@ def examine_dimension(model, submodule, buffer, dictionary=None, max_length=128,
         submodule,
         dictionary,
         dim_idx,
-        tokens,
+        inputs, # tokens,
         max_length=max_length,
         k=k
     )

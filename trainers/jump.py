@@ -3,9 +3,9 @@ Implements the training scheme for an SAE with Jump ReLUs.
 """
 
 import torch as t
-from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
-from ..dictionary import JumpAutoEncoder
+from trainer import SAETrainer
+from dictionary_learning.config import DEBUG
+from dictionary_learning.dictionary import JumpAutoEncoder
 from collections import namedtuple
 
 class ConstrainedAdam(t.optim.Adam):

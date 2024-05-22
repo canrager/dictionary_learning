@@ -2,9 +2,9 @@
 Implements the SAE training scheme from https://transformer-circuits.pub/2024/april-update/index.html#training-saes
 """
 import torch as t
-from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
-from ..dictionary import AutoEncoderNew
+from trainer import SAETrainer
+from dictionary_learning.config import DEBUG
+from dictionary_learning.dictionary import AutoEncoderNew
 from collections import namedtuple
 
 class StandardTrainerNew(SAETrainer):

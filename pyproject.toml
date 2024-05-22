@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "dictionary-learning"
+version = "0.1.0"
+description = ""
+authors = ["HuFY-dev <127644049+HuFY-dev@users.noreply.github.com>"]
+license = "MIT"
+readme = "README.md"
+include = ["dictionary_learning/"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+circuitsvis = "^1.43.2"
+datasets = "^2.18.0"
+einops = "^0.7.0"
+matplotlib = "^3.8.3"
+nnsight = "^0.2.11"
+pandas = "^2.2.1"
+plotly = "^5.18.0"
+torch = "^2.1.2"
+tqdm = "^4.66.1"
+umap-learn = "^0.5.6"
+zstandard = "^0.22.0"
+wandb = "^0.17.0"
+ipykernel = "^6.29.4"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

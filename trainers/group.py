@@ -4,8 +4,8 @@ import torch as t
 Implements the standard SAE training scheme.
 """
 
-from ..trainers.standard import StandardTrainer
-from ..config import DEBUG
+from standard import StandardTrainer
+from dictionary_learning.config import DEBUG
 
 
 class GroupSAETrainer(StandardTrainer):

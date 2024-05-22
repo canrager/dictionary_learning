@@ -163,3 +163,6 @@ wandb
 experiment*
 run_experiment.sh
 nohup.out
+
+# hf api keys
+HF_API_KEY.txt

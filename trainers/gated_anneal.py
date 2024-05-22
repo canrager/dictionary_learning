@@ -3,9 +3,9 @@ Implements the training scheme for a gated SAE described in https://arxiv.org/ab
 """
 
 import torch as t
-from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
-from ..dictionary import GatedAutoEncoder
+from trainer import SAETrainer
+from dictionary_learning.config import DEBUG
+from dictionary_learning.dictionary import GatedAutoEncoder
 from collections import namedtuple
 
 class ConstrainedAdam(t.optim.Adam):
