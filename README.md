@@ -6,9 +6,12 @@ Some dictionaries trained using this repository (and associated training checkpo
 
 # Set-up
 
-Navigate to the to the location where you would like to clone this repo, clone and enter the repo, and install the requirements.
+Clone this repository and set up the environment:
 ```bash
-pip install dictionary-learning
+git clone https://github.com/saprmarks/dictionary_learning
+cd dictionary_learning
+uv venv
+uv sync
 ```
 
 We also provide a [demonstration](https://github.com/adamkarvonen/dictionary_learning_demo), which trains and evaluates 2 SAEs in ~30 minutes before plotting the results.
