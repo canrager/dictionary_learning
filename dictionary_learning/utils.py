@@ -18,6 +18,7 @@ from .dictionary import (
     AutoEncoderNew,
     JumpReluAutoEncoder,
 )
+from training_demo.config import LLMConfig
 
 
 def hf_dataset_to_generator(dataset_name, split="train", streaming=True):
@@ -339,3 +340,14 @@ def truncate_model(model: AutoModelForCausalLM, layer: int):
     t.cuda.empty_cache()
 
     return model
+
+def get_model_tokenizer_submodule(llm_config: LLMConfig):
+
+    model = AutoModelForCausalLM.from_pretrained(
+        llm_config.llm_name, device_map="auto", torch_dtype=llm_config.dtype
+    )
+
+    model = truncate_model(model, llm_config.layer)
+    tokenizer = AutoTokenizer.from_pretrained(llm_config.llm_name)
+    submodule = get_submodule(model, llm_config.layer)
+    return model, tokenizer, submodule

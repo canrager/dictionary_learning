@@ -165,3 +165,5 @@ run_experiment.sh
 nohup.out
 *.zip
 *.lock
+precomputed*
+trained*

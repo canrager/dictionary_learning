@@ -271,14 +271,3 @@ def trainSAE(
             queue.put("DONE")
         for process in wandb_processes:
             process.join()
-
-
-#%%
-def Class():
-    pass
-
-c = Class()
-for attr in dir(c):
-    print(attr)
-    print(c)
-# %%
