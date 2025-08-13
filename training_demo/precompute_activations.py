@@ -106,11 +106,13 @@ def precompute_activations(
     text_generator,
     num_total_tokens,
     num_tokens_per_file,
-    num_tokens_per_batch,
+    llm_batch_size,
     ctx_len,
+    submodule_dim,
     add_special_tokens,
     save_dir,
     device,
+    dtype,
 ) -> None:
 
     os.makedirs(save_dir, exist_ok=True)
@@ -119,58 +121,46 @@ def precompute_activations(
         num_total_tokens % num_tokens_per_file == 0
     ), "Num_total_tokens must be a multiple of tokens_per_file"
     assert (
-        num_tokens_per_file % num_tokens_per_batch == 0
-    ), "Num_tokens_per_savefile must be a multiple of llm_batch_size"
-    assert (
-        num_tokens_per_batch % ctx_len == 0
-    ), "Num_tokens_per_savefile must be a multiple of ctx_len"
+        num_tokens_per_file % llm_batch_size * ctx_len == 0
+    ), "Num_tokens_per_file must be a multiple of llm_batch_size"
 
     num_files = num_total_tokens // num_tokens_per_file
-    num_batches = num_tokens_per_file // num_tokens_per_batch
+    num_batches = num_tokens_per_file // (llm_batch_size * ctx_len)
+
 
     for file_idx in range(num_files):
-        file_acts_bLD = []
-        file_inputs_bL = []
-        for batch_idx in trange(
-            num_batches, desc=f"Processing file {file_idx}/{num_files}"
+        file_acts_nBLD = t.zeros(num_batches, llm_batch_size, ctx_len, submodule_dim, device=device, dtype=dtype)
+        file_inputs_nBL = t.zeros(num_batches, llm_batch_size, ctx_len, device=device, dtype=dtype)
+        for batch_idx in trange(num_batches, desc=f"Processing file {file_idx}/{num_files}"
         ):
             # Collect input token batch
             encoding_BL = tokenized_batch(
                 tokenizer=tokenizer,
                 text_generator=text_generator,
-                batch_size=num_tokens_per_batch,
+                batch_size=llm_batch_size,
                 ctx_len=ctx_len,
                 add_special_tokens=add_special_tokens,
             )
-            file_inputs_bL.append(
-                encoding_BL.input_ids
-            )  # Mask is expected to be all true
+            file_inputs_nBL[batch_idx] = encoding_BL.input_ids
 
             # Collect LLM activations
             encoding_BL = encoding_BL.to(device)
             acts_BLD = collect_activations(model, submodule, encoding_BL)
-            acts_BLD = acts_BLD.cpu()
-            file_acts_bLD.append(acts_BLD)
+            file_acts_nBLD[batch_idx] = acts_BLD
 
-            t.cuda.empty_cache()
-            gc.collect()
-            del acts_BLD, encoding_BL
-
-        file_inputs_bL = t.cat(file_inputs_bL, dim=0)
-        file_acts_bLD = t.cat(file_acts_bLD, dim=0)
-
-        print(f"file inputs device {file_inputs_bL.device}")
-        print(f"file inputs device {file_acts_bLD.device}")
-
-        save_dict = {"input_ids": file_inputs_bL, "states": file_acts_bLD}
+        save_dict = {
+            "input_ids": file_inputs_nBL.flatten(0,1).cpu(), 
+            "states": file_acts_nBLD.flatten(0,1).cpu()
+        }
 
         save_name = f"activations_{file_idx:05d}_of_{num_files:05d}.pkl"
         save_path = os.path.join(save_dir, save_name)
         with open(save_path, "wb") as f:
             t.save(save_dict, f)
 
+        del file_inputs_nBL, file_acts_nBLD
         gc.collect()
-        del file_inputs_bL, file_acts_bLD
+        t.cuda.empty_cache()
 
     # Generate metadata.json after all files are saved
     generate_metadata(save_dir, num_files)
@@ -259,11 +249,13 @@ if __name__ == "__main__":
         text_generator,
         num_total_tokens=data_config.num_total_tokens,
         num_tokens_per_file=data_config.num_tokens_per_file,
-        num_tokens_per_batch=llm_config.llm_batch_size,
+        llm_batch_size=llm_config.llm_batch_size,
         ctx_len=data_config.ctx_len,
+        submodule_dim=llm_config.submodule_dim,
         add_special_tokens=data_config.add_special_tokens,
         save_dir=data_config.precomputed_act_save_dir,
         device=llm_config.device,
+        dtype=llm_config.dtype
     )
 
     # Example usage of ActivaultS3ActivationBuffer with LocalCache
