@@ -167,3 +167,4 @@ nohup.out
 *.lock
 precomputed*
 trained*
+_dev

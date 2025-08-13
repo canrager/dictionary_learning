@@ -1,7 +1,12 @@
+'''
+Central file for configurations of all SAE training run hyperparameters.
+'''
+
 from typing import Optional, Type, Any, List, Dict
 import torch as t
 
-from training_demo.config_defaults import get_trainer_configs
+from dictionary_learning.utils import unroll_config
+
 
 from dictionary_learning.trainers.standard import (
     StandardTrainerAprilUpdate,
@@ -15,60 +20,76 @@ from dictionary_learning.trainers.top_k import (
 )
 
 
-class LLMConfig:
+##########
+# Central config class for global experiment parameters
+##########
+
+class EnvironmentConfig:
     def __init__(self) -> None:
-        # self.llm_name: str = "EleutherAI/pythia-160m-deduped"
-        self.llm_name: str = "google/gemma-2-2b"
-        self.llm_batch_size: int = 500
-        self.sae_batch_size: int = 100
-        self.dtype: t.dtype = t.bfloat16
-        self.layer: int = 6
-        self.submodule_name: str = f"resid_post_layer_{self.layer}"
-        self.submodule_dim: int = 768
-        self.device: str = "cuda:0"
-
-        self.normalize_input_acts: bool = True
-
-
-llm_config = LLMConfig()
-
-
-class DataConfig:
-    def __init__(self) -> None:
+        # Text dataset
         self.dataset_name: str = "HuggingFaceFW/fineweb"
         self.dataset_split: str = "train"
-        self.num_total_tokens: int = 50_000_000
-        self.num_tokens_per_file: int = 100_000  # Roughly 100 tokens
+        self.num_total_tokens: int = 50_000_000 # <30mins on A6000
+        self.num_tokens_per_file: int = 2_000_000  # Roughly 10GB at ctx_len
         self.ctx_len: int = 50
         self.add_special_tokens: bool = False
-        self.trained_sae_save_dir = f"trained_sae_splinterp_sweep"
+
+        # LLM Activations: SAE Input data
+        self.llm_name: str = "google/gemma-2-2b"
+        self.llm_batch_size: int = 500
+        self.dtype: t.dtype = t.bfloat16
+        self.layer: int = 12
+        self.submodule_name: str = f"resid_post_layer_{self.layer}"
+        self.submodule_dim: int = 2304
+        self.normalize_input_acts: bool = True
         self.precomputed_act_save_dir = f"precomputed_activations_{self.dataset_name.split("/")[-1]}_{self.num_total_tokens}_tokens"
+
+        # Activation Buffer
+        self.sae_batch_size: int = 100
+        self.device: str = "cuda:0"
         self.seed: int = 42
+        self.steps = int(self.num_total_tokens / self.sae_batch_size)
+
+        # Saving trained sae artifacts
+        self.trained_sae_save_dir = "trained_sae_splinterp_sweep"
+        self.save_steps = self.relative_log_steps_to_absolute(t.logspace(-3, 0, 7))
+
+        # Wandb logging
+        self.use_wandb: bool = True 
+        self.wandb_project_name: str = "splinterp_sae_sweep"
         self.log_steps: int = 100
 
-        # save_steps
-        desired_checkpoints = t.logspace(-3, 0, 7).tolist()
-        desired_checkpoints = [0.0] + desired_checkpoints[:-1]
-        desired_checkpoints.sort()
+    def relative_log_steps_to_absolute(self, relative_log_steps: t.Tensor):
+        relative_log_steps = relative_log_steps.tolist()
+        relative_log_steps = [0.0] + relative_log_steps[:-1]
+        absolute_steps = [int(self.steps * rel) for rel in relative_log_steps]
+        absolute_steps.sort()
+        return absolute_steps
 
-        self.steps = int(self.num_total_tokens / llm_config.sae_batch_size)
-        self.save_steps = [int(self.steps * step) for step in desired_checkpoints]
-        self.save_steps.sort()
 
-        self.use_wandb: bool = True
-        self.wandb_project_name: str = "splinterp_sae_sweep"
-
-data_config = DataConfig()
-
+##########
+# Training configurations for individual SAE architectures
+#
+# Simply pass a list to sweep over a hyperparameter.
+# Hyperparameter combinations will be automatically factored out 
+# into individual TrainerConfigs with get_trainer_configs below.
+##########
 
 class BaseTrainerConfig:
+    """
+    Base Configuration shared by all SAE architectures.
+    DO NOT EDIT THIS CONFIG, but individual SAE configs below.
+    """
+
     def __init__(self) -> None:
-        self.activation_dim: int = llm_config.submodule_dim
-        self.layer: str = llm_config.layer
-        self.lm_name: str = llm_config.llm_name
-        self.submodule_name: str
-        self.device: str = llm_config.device
-        self.steps: int = data_config.steps
+        # Inherit env_configs, if necessary renaming to adhere to trainSAE 
+        env_config = EnvironmentConfig()
+        self.activation_dim: int = env_config.submodule_dim
+        self.layer: str = env_config.layer
+        self.lm_name: str = env_config.llm_name
+        self.submodule_name: str = env_config.submodule_name
+        self.device: str = env_config.device
+        self.steps: int = env_config.steps
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -76,7 +97,8 @@ class BaseTrainerConfig:
         """
         param_dict = {}
 
-        skipped_arguments = ["architecture", "to_dict", "wandb_project_name"]
+        # hacky way to adhere to the format expected by SAE trainers
+        skipped_arguments = ["architecture_name", "to_dict", "wandb_project_name"]
 
         for attr_name in dir(self):
             # Skip private attributes and methods
@@ -91,11 +113,11 @@ class StandardTrainerConfig(BaseTrainerConfig):
     def __init__(self) -> None:
         super().__init__()
 
-        self.architecture: str = "standard"
+        self.architecture_name: str = "standard"
         self.trainer: Type[Any] = StandardTrainerAprilUpdate
         self.dict_class: Type[Any] = AutoEncoder
         self.wandb_project_name = (
-            f"StandardTrainer-{llm_config.llm_name}-{llm_config.submodule_name}",
+            f"StandardTrainer-{self.lm_name}-{self.submodule_name}",
         )
 
         self.dict_size: int | List[int] = 10_000
@@ -110,11 +132,11 @@ class TopKTrainerConfig(BaseTrainerConfig):
     def __init__(self) -> None:
         super().__init__()
 
-        self.architecture: str = "top_k"
+        self.architecture_name: str = "top_k"
         self.trainer: Type[Any] = TopKTrainer
         self.dict_class: Type[Any] = AutoEncoderTopK
         self.wandb_project_name = (
-            f"TopKTrainer-{llm_config.llm_name}-{llm_config.submodule_name}"
+            f"TopKTrainer-{self.lm_name}-{self.submodule_name}"
         )
 
         self.dict_size: int | List[int] = 10_000
@@ -127,10 +149,23 @@ class TopKTrainerConfig(BaseTrainerConfig):
         self.seed: int | List[int] = [0]
 
 
-architecture_configs = [StandardTrainerConfig(), TopKTrainerConfig()]
+# Unroll hyperparameter sweeps into the list of individual configs expected by trainSAE
+def get_trainer_configs(configs_with_lists: List[Any]) -> list[dict]:
+    """For each architecture, generate every combination of hyperparameters lists as a single trainer config."""
+
+    trainer_config_dicts = []
+    for cfg in configs_with_lists:
+        unrolled_configs = unroll_config(cfg)
+        unrolled_config_dicts = [c.to_dict() for c in unrolled_configs]
+        trainer_config_dicts.extend(unrolled_config_dicts)
+
+    return trainer_config_dicts
 
 
 if __name__ == "__main__":
-    all_configs = get_trainer_configs(architecture_configs)
-    print(f"Found {len(all_configs)} in total.")
-    print(all_configs)
+    # Example usage
+    
+    TRAINER_CONFIG_LIST = get_trainer_configs(
+        [StandardTrainerConfig(), TopKTrainerConfig()]
+    )
+    print(f"Found {len(TRAINER_CONFIG_LIST)} in total.")

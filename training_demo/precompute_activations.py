@@ -1,6 +1,5 @@
 import os
 import json
-from datasets import load_dataset
 from transformers import BatchEncoding
 import torch as t
 import gc
@@ -16,7 +15,7 @@ from dictionary_learning.activault_s3_buffer import (
     shuffle_megabatch_tokens,
     ActivaultS3ActivationBuffer,
 )
-from training_demo.config import LLMConfig, DataConfig
+from training_demo.config import EnvironmentConfig
 
 
 def tokenized_batch(
@@ -68,26 +67,33 @@ def tokenized_batch(
 
 def generate_metadata(save_dir, num_files):
     """Generate metadata.json file compatible with S3RCache."""
-    first_file_path = os.path.join(
-        save_dir, f"activations_{0:05d}_of_{num_files:05d}.pkl"
+    first_states_path = os.path.join(
+        save_dir, f"states_{0:05d}_of_{num_files:05d}.pkl"
+    )
+    first_input_ids_path = os.path.join(
+        save_dir, f"input_ids_{0:05d}_of_{num_files:05d}.pkl"
     )
 
-    # Load first file to get tensor shapes and dtype
-    with open(first_file_path, "rb") as f:
-        first_data = t.load(f)
+    # Load first files to get tensor shapes and dtype
+    with open(first_states_path, "rb") as f:
+        first_states = t.load(f)
+    with open(first_input_ids_path, "rb") as f:
+        first_input_ids = t.load(f)
 
-    states_shape = list(first_data["states"].shape)
-    input_ids_shape = list(first_data["input_ids"].shape)
-    dtype_str = str(first_data["states"].dtype)
+    states_shape = list(first_states.shape)
+    input_ids_shape = list(first_input_ids.shape)
+    dtype_str = str(first_states.dtype)
 
-    # Get file size in bytes
-    bytes_per_file = os.path.getsize(first_file_path)
+    # Get file sizes in bytes
+    states_bytes_per_file = os.path.getsize(first_states_path)
+    input_ids_bytes_per_file = os.path.getsize(first_input_ids_path)
 
     metadata = {
         "shape": states_shape,
         "input_ids_shape": input_ids_shape,
         "dtype": dtype_str,
-        "bytes_per_file": bytes_per_file,
+        "states_bytes_per_file": states_bytes_per_file,
+        "input_ids_bytes_per_file": input_ids_bytes_per_file,
     }
 
     # Save metadata.json
@@ -148,15 +154,20 @@ def precompute_activations(
             acts_BLD = collect_activations(model, submodule, encoding_BL)
             file_acts_nBLD[batch_idx] = acts_BLD
 
-        save_dict = {
-            "input_ids": file_inputs_nBL.flatten(0,1).cpu(), 
-            "states": file_acts_nBLD.flatten(0,1).cpu()
-        }
-
-        save_name = f"activations_{file_idx:05d}_of_{num_files:05d}.pkl"
-        save_path = os.path.join(save_dir, save_name)
-        with open(save_path, "wb") as f:
-            t.save(save_dict, f)
+        # Save states and input_ids as separate files
+        states_name = f"states_{file_idx:05d}_of_{num_files:05d}.pkl"
+        input_ids_name = f"input_ids_{file_idx:05d}_of_{num_files:05d}.pkl"
+        
+        states_path = os.path.join(save_dir, states_name)
+        input_ids_path = os.path.join(save_dir, input_ids_name)
+        
+        # Save states file
+        with open(states_path, "wb") as f:
+            t.save(file_acts_nBLD.flatten(0,1).cpu(), f)
+            
+        # Save input_ids file
+        with open(input_ids_path, "wb") as f:
+            t.save(file_inputs_nBL.flatten(0,1).cpu(), f)
 
         del file_inputs_nBL, file_acts_nBLD
         gc.collect()
@@ -169,30 +180,25 @@ def precompute_activations(
 
 
 class LocalCache:
-    """Lightweight cache that loads precomputed activation files sequentially."""
+    """Lightweight cache that loads precomputed activation files sequentially. Only loads states for faster performance."""
 
-    def __init__(self, save_dir, shuffle=True, seed=42, return_ids=True):
+    def __init__(self, save_dir, seed=42):
         self.save_dir = save_dir
-        self.shuffle = shuffle
         self.seed = seed
-        self.return_ids = return_ids
 
         # Load metadata
         metadata_path = os.path.join(save_dir, "metadata.json")
         with open(metadata_path, "r") as f:
             self.metadata = json.load(f)
 
-        # Find all activation files
-        self.file_paths = []
+        # Find all states files (only load states for performance)
+        self.states_file_paths = []
+        
         for filename in os.listdir(save_dir):
-            if filename.startswith("activations_") and filename.endswith((".pkl", "")):
-                if not filename.endswith(".pkl"):
-                    # Handle files without extension
-                    self.file_paths.append(os.path.join(save_dir, filename))
-                else:
-                    self.file_paths.append(os.path.join(save_dir, filename))
+            if filename.startswith("states_") and filename.endswith(".pkl"):
+                self.states_file_paths.append(os.path.join(save_dir, filename))
 
-        self.file_paths.sort()  # Ensure consistent order, don't shuffle file order
+        self.states_file_paths.sort()  # Ensure consistent order
         self.current_file_idx = 0
 
     def __iter__(self):
@@ -200,30 +206,17 @@ class LocalCache:
         return self
 
     def __next__(self):
-        if self.current_file_idx >= len(self.file_paths):
+        if self.current_file_idx >= len(self.states_file_paths):
             raise StopIteration
 
-        file_path = self.file_paths[self.current_file_idx]
+        states_path = self.states_file_paths[self.current_file_idx]
         self.current_file_idx += 1
-
-        with open(file_path, "rb") as f:
-            data = t.load(f)
-
-        # Apply shuffling to activations within the file
-        if self.shuffle and not self.return_ids:
-            # Only shuffle states if not returning input_ids
-            data["states"] = shuffle_megabatch_tokens(data["states"], self.seed)
-        elif self.shuffle and self.return_ids:
-            # Shuffle both states and input_ids together
-            states = data["states"]
-            shuffled_states = shuffle_megabatch_tokens(states, self.seed)
-            data["states"] = shuffled_states
-
-        if not self.return_ids:
-            # Return only states for backward compatibility
-            return data["states"]
-
-        return data  # Returns {"states": tensor, "input_ids": tensor}
+        
+        # Only load states for faster performance
+        with open(states_path, "rb") as f:
+            states = t.load(f)
+            
+        return {"states": states}
 
     def finalize(self):
         """Cleanup method for compatibility with ActivaultS3ActivationBuffer."""
@@ -231,14 +224,13 @@ class LocalCache:
 
 
 if __name__ == "__main__":
-    llm_config = LLMConfig()
-    data_config = DataConfig()
+    env_config = EnvironmentConfig()
 
-    model, tokenizer, submodule = get_model_tokenizer_submodule(llm_config)
+    model, tokenizer, submodule = get_model_tokenizer_submodule(env_config)
 
     text_generator = hf_dataset_to_generator(
-        dataset_name=data_config.dataset_name,
-        split=data_config.dataset_split,
+        dataset_name=env_config.dataset_name,
+        split=env_config.dataset_split,
         streaming=True,
     )
 
@@ -247,15 +239,15 @@ if __name__ == "__main__":
         submodule,
         tokenizer,
         text_generator,
-        num_total_tokens=data_config.num_total_tokens,
-        num_tokens_per_file=data_config.num_tokens_per_file,
-        llm_batch_size=llm_config.llm_batch_size,
-        ctx_len=data_config.ctx_len,
-        submodule_dim=llm_config.submodule_dim,
-        add_special_tokens=data_config.add_special_tokens,
-        save_dir=data_config.precomputed_act_save_dir,
-        device=llm_config.device,
-        dtype=llm_config.dtype
+        num_total_tokens=env_config.num_total_tokens,
+        num_tokens_per_file=env_config.num_tokens_per_file,
+        llm_batch_size=env_config.llm_batch_size,
+        ctx_len=env_config.ctx_len,
+        submodule_dim=env_config.submodule_dim,
+        add_special_tokens=env_config.add_special_tokens,
+        save_dir=env_config.precomputed_act_save_dir,
+        device=env_config.device,
+        dtype=env_config.dtype
     )
 
     # Example usage of ActivaultS3ActivationBuffer with LocalCache
@@ -263,22 +255,20 @@ if __name__ == "__main__":
 
     # Create LocalCache from precomputed activations
     local_cache = LocalCache(
-        save_dir=data_config.precomputed_act_save_dir,
-        shuffle=True,
-        seed=data_config.seed,
-        return_ids=True,
+        save_dir=env_config.precomputed_act_save_dir,
+        seed=env_config.seed,
     )
 
     # Create ActivaultS3ActivationBuffer using LocalCache
     activation_buffer = ActivaultS3ActivationBuffer(
         cache=local_cache,
-        batch_size=llm_config.sae_batch_size,
-        device=llm_config.device,
+        batch_size=env_config.sae_batch_size,
+        device=env_config.device,
         io="out",
     )
 
     # Iterate through activation batches
-    print(f"Loading activation batches from {data_config.precomputed_act_save_dir}")
+    print(f"Loading activation batches from {env_config.precomputed_act_save_dir}")
     for i, batch in enumerate(activation_buffer):
         print(f"Batch {i}: shape {batch.shape}, device {batch.device}")
         if i >= 2:  # Show first 3 batches as example
@@ -289,4 +279,4 @@ if __name__ == "__main__":
 
     t.cuda.synchronize()
     print(f"last line!")
-    sys.exit(0)  # Somehow not properly exiting the file automatically
+    sys.exit(0)  # Somehow not properly exiting the file automatically if using Huggingface Fineweb datatset. Works fine with other datasets.

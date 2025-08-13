@@ -8,6 +8,8 @@ from fractions import Fraction
 import random
 from transformers import AutoTokenizer
 import torch as t
+import itertools
+import copy
 
 from .trainers.top_k import AutoEncoderTopK
 from .trainers.batch_top_k import BatchTopKSAE
@@ -18,7 +20,6 @@ from .dictionary import (
     AutoEncoderNew,
     JumpReluAutoEncoder,
 )
-from training_demo.config import LLMConfig
 
 
 def hf_dataset_to_generator(dataset_name, split="train", streaming=True):
@@ -341,13 +342,75 @@ def truncate_model(model: AutoModelForCausalLM, layer: int):
 
     return model
 
-def get_model_tokenizer_submodule(llm_config: LLMConfig):
+def get_model_tokenizer_submodule(env_config):
 
     model = AutoModelForCausalLM.from_pretrained(
-        llm_config.llm_name, device_map="auto", torch_dtype=llm_config.dtype
+        env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype
     )
 
-    model = truncate_model(model, llm_config.layer)
-    tokenizer = AutoTokenizer.from_pretrained(llm_config.llm_name)
-    submodule = get_submodule(model, llm_config.layer)
+    model = truncate_model(model, env_config.layer)
+    tokenizer = AutoTokenizer.from_pretrained(env_config.llm_name)
+    submodule = get_submodule(model, env_config.layer)
     return model, tokenizer, submodule
+
+
+def unroll_config(config_instance):
+    """
+    Unroll a config instance with list parameters into multiple config instances.
+
+    Args:
+        config_instance: An instance of a config class with potential list parameters
+
+    Returns:
+        List of config instances, one for each combination of list parameters
+
+    Raises:
+        ValueError: If any list parameter is empty or None
+    """
+    # Find all attributes that are lists
+    list_params = {}
+    other_params = {}
+
+    for attr_name in dir(config_instance):
+        if attr_name.startswith("_"):
+            continue
+
+        attr_value = getattr(config_instance, attr_name)
+
+        # Skip methods and properties
+        if callable(attr_value):
+            continue
+
+        if isinstance(attr_value, list):
+            if len(attr_value) == 0:
+                raise ValueError(f"Parameter '{attr_name}' has empty list")
+            list_params[attr_name] = attr_value
+        else:
+            other_params[attr_name] = attr_value
+
+    # Check for None values in list params
+    for param_name, param_list in list_params.items():
+        if param_list is None:
+            raise ValueError(f"Parameter '{param_name}' is None")
+
+    # If no list parameters, return the original config
+    if not list_params:
+        return [config_instance]
+
+    # Generate all combinations
+    param_names = list(list_params.keys())
+    param_values = list(list_params.values())
+
+    unrolled_config = []
+
+    for combination in itertools.product(*param_values):
+        # Create a new config instance
+        new_config = copy.deepcopy(config_instance)
+
+        # Set the specific values for this combination
+        for param_name, value in zip(param_names, combination):
+            setattr(new_config, param_name, value)
+
+        unrolled_config.append(new_config)
+
+    return unrolled_config
