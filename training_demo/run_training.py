@@ -1,4 +1,10 @@
-from training_demo.config import EnvironmentConfig, StandardTrainerConfig, TopKTrainerConfig, get_trainer_configs
+from training_demo.config import (
+    EnvironmentConfig,
+    get_trainer_configs,
+    StandardTrainerConfig,
+    TopKTrainerConfig,
+    SplinterpTrainerConfig,
+)
 from training_demo.precompute_activations import LocalCache
 from dictionary_learning.activault_s3_buffer import ActivaultS3ActivationBuffer
 from dictionary_learning.training import trainSAE
@@ -7,17 +13,13 @@ import torch as t
 
 # Load Configs
 env_config = EnvironmentConfig()
-trainer_config_list = get_trainer_configs(
-    [StandardTrainerConfig(), TopKTrainerConfig()]
-)
-print(f"Found {len(trainer_config_list)} in total.")
+trainer_config_list = get_trainer_configs([StandardTrainerConfig(), SplinterpTrainerConfig()])
+print(f"Found {len(trainer_config_list)} TrainerConfigs in total.")
 
 # Create activation buffer that loads precomputed activations from local
 local_cache = LocalCache(
     save_dir=env_config.precomputed_act_save_dir,
-    shuffle=True,
     seed=env_config.seed,
-    return_ids=True,
 )
 
 activation_buffer = ActivaultS3ActivationBuffer(

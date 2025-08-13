@@ -11,6 +11,7 @@ from dictionary_learning.utils import unroll_config
 from dictionary_learning.trainers.standard import (
     StandardTrainerAprilUpdate,
 )
+from dictionary_learning.trainers.splinterp import SplinterpTrainer
 from dictionary_learning.dictionary import (
     AutoEncoder,
 )
@@ -55,7 +56,7 @@ class EnvironmentConfig:
         self.save_steps = self.relative_log_steps_to_absolute(t.logspace(-3, 0, 7))
 
         # Wandb logging
-        self.use_wandb: bool = True 
+        self.use_wandb: bool = False 
         self.wandb_project_name: str = "splinterp_sae_sweep"
         self.log_steps: int = 100
 
@@ -117,7 +118,7 @@ class StandardTrainerConfig(BaseTrainerConfig):
         self.trainer: Type[Any] = StandardTrainerAprilUpdate
         self.dict_class: Type[Any] = AutoEncoder
         self.wandb_project_name = (
-            f"StandardTrainer-{self.lm_name}-{self.submodule_name}",
+            f"StandardTrainer-{self.lm_name}-{self.submodule_name}"
         )
 
         self.dict_size: int | List[int] = 10_000
@@ -126,6 +127,34 @@ class StandardTrainerConfig(BaseTrainerConfig):
         self.l1_penalty: float | List[float] = [0.015, 0.06]
         self.sparsity_warmup_steps: Optional[int] = 10
         self.seed: int | List[int] = [0]
+
+
+class SplinterpTrainerConfig(BaseTrainerConfig):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.architecture_name: str = "splinterp"
+        self.trainer: Type[Any] = SplinterpTrainer
+        self.dict_class: Type[Any] = AutoEncoder
+        self.wandb_project_name = (
+            f"SplinterpTrainer-{self.lm_name}-{self.submodule_name}"
+        )
+
+        self.dict_size: int | List[int] = 10_000
+        self.lr: float | List[float] = [3e-4]
+        self.warmup_steps: int | List[int] = 10
+        self.l1_penalty: float | List[float] = [0.015, 0.06]
+        self.sparsity_warmup_steps: Optional[int] = 10
+        self.seed: int | List[int] = [0]
+
+        self.mu_enc : float = 0.001
+        self.nu_enc : float = 0.001
+        self.mu_dec : float = 0.001
+        self.nu_dec : float = 0.001
+        self.alpha_w : float = 1e-6
+        self.beta_b : float = 1e-6
+        self.decoder_reg : float = 1e-5
+        self.prev_decoder_bias: Optional[t.Tensor] = None # Tensor values have difficulties with exporting to json!
 
 
 class TopKTrainerConfig(BaseTrainerConfig):
