@@ -29,7 +29,7 @@ class EnvironmentConfig:
         # Text dataset
         self.dataset_name: str = "HuggingFaceFW/fineweb"
         self.dataset_split: str = "train"
-        self.num_total_tokens: int = 50_000_000 # <30mins on A6000
+        self.num_total_tokens: int = 10_000_000 # <30mins on A6000
         self.num_tokens_per_file: int = 2_000_000  # Roughly 10GB at ctx_len
         self.ctx_len: int = 50
         self.add_special_tokens: bool = False
@@ -42,7 +42,8 @@ class EnvironmentConfig:
         self.submodule_name: str = f"resid_post_layer_{self.layer}"
         self.submodule_dim: int = 2304
         self.normalize_input_acts: bool = True
-        self.precomputed_act_save_dir = f"precomputed_activations_{self.dataset_name.split("/")[-1]}_{self.num_total_tokens}_tokens"
+        # self.precomputed_act_save_dir = f"precomputed_activations_{self.dataset_name.split("/")[-1]}_{self.num_total_tokens}_tokens"
+        self.precomputed_act_save_dir = f"precomputed_activations_fineweb_50000000_tokens"
 
         # Activation Buffer
         self.sae_batch_size: int = 100
@@ -53,9 +54,10 @@ class EnvironmentConfig:
         # Saving trained sae artifacts
         self.trained_sae_save_dir = "trained_sae_splinterp_sweep"
         self.save_steps = self.relative_log_steps_to_absolute(t.logspace(-3, 0, 7))
+        self.backup_steps = None
 
         # Wandb logging
-        self.use_wandb: bool = True 
+        self.use_wandb: bool = False 
         self.wandb_project_name: str = "splinterp_sae_sweep"
         self.log_steps: int = 100
 
@@ -120,12 +122,12 @@ class StandardTrainerConfig(BaseTrainerConfig):
             f"StandardTrainer-{self.lm_name}-{self.submodule_name}",
         )
 
-        self.dict_size: int | List[int] = 10_000
-        self.lr: float | List[float] = [3e-4]
+        self.dict_size: int | List[int] = self.activation_dim * 4
+        self.lr: float | List[float] = [1e-4, 3e-4]
         self.warmup_steps: int | List[int] = 10
         self.l1_penalty: float | List[float] = [0.015, 0.06]
         self.sparsity_warmup_steps: Optional[int] = 10
-        self.seed: int | List[int] = [0]
+        self.seed: int | List[int] = 0
 
 
 class TopKTrainerConfig(BaseTrainerConfig):
@@ -139,14 +141,14 @@ class TopKTrainerConfig(BaseTrainerConfig):
             f"TopKTrainer-{self.lm_name}-{self.submodule_name}"
         )
 
-        self.dict_size: int | List[int] = 10_000
-        self.lr: float = [3e-4]
+        self.dict_size: int | List[int] = self.activation_dim * 4
+        self.lr: float = [1e-4, 3e-4]
         self.warmup_steps: int | List[int] = 10
         self.k: int | List[int] = [80, 160]
         self.auxk_alpha: float = 1 / 32
         self.threshold_beta: float = 0.999
         self.threshold_start_step: int = 1000  # when to begin tracking the average threshold
-        self.seed: int | List[int] = [0]
+        self.seed: int | List[int] = 0
 
 
 # Unroll hyperparameter sweeps into the list of individual configs expected by trainSAE

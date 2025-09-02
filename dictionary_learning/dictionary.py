@@ -182,7 +182,7 @@ class IdentityDict(Dictionary, nn.Module):
             return x
 
     @classmethod
-    def from_pretrained(cls, activation_dim, path, dtype=None, device=None):
+    def from_pretrained(cls, activation_dim=None, path=None, dtype=None, device=None):
         """
         Load a pretrained dictionary from a file.
         """

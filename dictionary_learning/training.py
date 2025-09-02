@@ -226,6 +226,8 @@ def trainSAE(
                     os.mkdir(os.path.join(dir, "checkpoints"))
 
                 checkpoint = {k: v.cpu() for k, v in trainer.ae.state_dict().items()}
+                if verbose:
+                    print(f"saving checkpoint at step {step}")
                 t.save(
                     checkpoint,
                     os.path.join(dir, "checkpoints", f"ae_{step}.pt"),
@@ -251,7 +253,6 @@ def trainSAE(
                     },
                     os.path.join(save_dir, "ae.pt"),
                 )
-
         # training
         for trainer in trainers:
             with autocast_context:

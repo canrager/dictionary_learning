@@ -212,7 +212,6 @@ class LocalCache:
         states_path = self.states_file_paths[self.current_file_idx]
         self.current_file_idx += 1
         
-        # Only load states for faster performance
         with open(states_path, "rb") as f:
             states = t.load(f)
             

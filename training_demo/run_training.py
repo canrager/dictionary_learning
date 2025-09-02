@@ -10,14 +10,12 @@ env_config = EnvironmentConfig()
 trainer_config_list = get_trainer_configs(
     [StandardTrainerConfig(), TopKTrainerConfig()]
 )
-print(f"Found {len(trainer_config_list)} in total.")
+print(f"Found {len(trainer_config_list)} trainer configs in total.")
 
 # Create activation buffer that loads precomputed activations from local
 local_cache = LocalCache(
     save_dir=env_config.precomputed_act_save_dir,
-    shuffle=True,
     seed=env_config.seed,
-    return_ids=True,
 )
 
 activation_buffer = ActivaultS3ActivationBuffer(
@@ -40,5 +38,5 @@ trainSAE(
     normalize_activations=env_config.normalize_input_acts,
     verbose=False,
     autocast_dtype=env_config.dtype,
-    backup_steps=10,
+    backup_steps=env_config.backup_steps,
 )
