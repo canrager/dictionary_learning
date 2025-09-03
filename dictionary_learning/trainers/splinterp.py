@@ -18,6 +18,13 @@ from dictionary_learning.dictionary import AutoEncoder
 
 ### Reference implementation
 
+def TopKActivationFunction(k, pre_relu_acts_BF):
+    post_relu_feat_acts_BF = t.relu(pre_relu_acts_BF)
+    tops_acts_BK, top_indices_BK = post_relu_feat_acts_BF.topk(k, sorted=False, dim=-1)
+
+    buffer_BF = t.zeros_like(post_relu_feat_acts_BF)
+    encoded_acts_BF = buffer_BF.scatter_(dim=-1, index=top_indices_BK, src=tops_acts_BK)
+    return encoded_acts_BF
 
 class SplinterpTrainer(SAETrainer):
     """
@@ -32,6 +39,7 @@ class SplinterpTrainer(SAETrainer):
         dict_size: int,
         layer: int,
         lm_name: str,
+        num_total_tokens: int,
         dict_class=AutoEncoder,
         lr: float = 1e-3,
         l1_penalty: float = 1e-1,
@@ -50,7 +58,10 @@ class SplinterpTrainer(SAETrainer):
         alpha_w: float = 1e-6,
         beta_b: float = 1e-6,
         decoder_reg: float = 1e-5,
-        prev_decoder_bias: Optional[t.Tensor] = None
+        prev_decoder_bias: Optional[t.Tensor] = None,
+
+        activation_fn: str = "relu", # "relu" or "topk"
+        k: Optional[int] = None, # Needs to be set for TopK activation function.
     ):
         super().__init__(seed)
 
@@ -82,7 +93,7 @@ class SplinterpTrainer(SAETrainer):
             self.device = device
         self.ae.to(self.device)
 
-        self.optimizer = t.optim.Adam(self.ae.encoder.parameters(), lr=lr)
+        self.optimizer = t.optim.Adam(self.ae.encoder.parameters(), lr=lr) # NOTE Only encder is updated by SGD in the splinterp training process.
 
         lr_fn = get_lr_schedule(
             steps,
@@ -105,6 +116,8 @@ class SplinterpTrainer(SAETrainer):
         self.decoder_reg = decoder_reg
 
         self.prev_decoder_bias = prev_decoder_bias
+
+        self.num_total_tokens = num_total_tokens
 
     def loss(self, x, step: int, logging=False, **kwargs):
 
@@ -132,7 +145,153 @@ class SplinterpTrainer(SAETrainer):
                 },
             )
 
-    def update_decoder_analytically(self, x):
+    def LSsoln_onebatch2(self, x, tol=1e-8):
+        """
+        Uses batch data to approximate the A and C terms in the original PAM-SGD algorithm,
+        by viewing any sum over all r as N * mean (over all r) and replacing this with 
+        N * mean (over batch), and replacing all other means over all r with means over batch.
+
+        Original Matlab code:
+        --------
+        
+        N_over_B = N/batch_size;
+        N_over_betanuN = N/(beta + nu + N);
+        % Get batch data & mean (in prod code, this will use a data reader)
+        X_batch = X(:,batch_indices); %n x batch_size matrix
+        xbar_batch = mean(X_batch,2);
+        % Compute Z_batch & mean
+        Z_batch = activationfn(W_enc*X_batch + b_enc);
+        zbar_batch = mean(Z_batch,2);
+        % WA = C at optimum
+        A_Batch = (alpha+mu)*eye(d) + N_over_B * (Z_batch*Z_batch') - N * N_over_betanuN *(zbar_batch * zbar_batch');
+        C_Batch = mu*old_W_dec +  N_over_B * X_batch*Z_batch' - N_over_betanuN * (N*xbar_batch + nu*old_b_dec) * zbar_batch' ;
+        W_dec = C_Batch / (A_Batch + tol * eye(d));
+        % Optimal b
+        b_dec = nu/(beta+nu+N) * old_b_dec + N_over_betanuN * (xbar_batch - W_dec * zbar_batch);
+        
+        Parameters:
+        -----------
+        x : torch.Tensor
+            The batch_size x n batch matrix of data points
+        z : torch.Tensor
+            The batch_size x d batch matrix of encoded data points (post activation fn)
+        W_enc : torch.Tensor
+            Current encoding parameters, a d x n matrix
+        b_enc : torch.Tensor
+            Current encoding parameters, d x 1 vector
+        activationfn : callable
+            A function that applies the activation function (e.g., ReLU, TopK) to each column of its input
+        alpha : float
+            Non-negative scalar parameter
+        beta : float
+            Non-negative scalar parameter
+        batch_indices : torch.Tensor or list
+            The indices of the data in the batch to be used
+        N : int
+            Total number of data points, a (potentially very large) positive integer
+        mu : float
+            Non-negative scalar parameter
+        nu : float
+            Non-negative scalar parameter
+        old_W_dec : torch.Tensor
+            Previous decoding parameters, W an n x d matrix
+        old_b_dec : torch.Tensor
+            Previous decoding parameters, b a n x 1 vector
+        tol : float, optional
+            Non-negative scalar to prevent inverting a singular matrix (default: 1e-8)
+
+
+        Adaptations from matlab code to this pytorch codebase:
+        -------
+        x : The batch_size x n batch matrix of data points (instead of X)
+        z : The batch_size x d batch matrix of encoded data points (post activation fn) (instead of computing Z_batch)
+        n --> self.activation_dim
+        d --> self.dict_size, the latent SAE dimension
+        N --> self.num_total_tokens
+        alpha --> self.alpha_w
+        beta --> self.beta_b
+        mu --> self.mu_w
+        nu --> self.nu_w
+        old_W_dec --> self.W_dec (n x d matrix, but note: actual W_dec should be d x n)
+        old_b_dec --> self.b_dec (n x 1 vector)
+        tol --> tol (passed as parameter, default 1e-8)
+        
+        Returns:
+        --------
+        W_dec : torch.Tensor
+            New decoding weight matrix, n x d
+        b_dec : torch.Tensor
+            New decoding bias vector, n x 1
+        """
+
+        # Set-up
+        batch_size = x.shape[0]
+        N_over_B = self.num_total_tokens / batch_size
+        N_over_betanuN = self.num_total_tokens / (self.beta_b + self.nu_dec + self.num_total_tokens)
+
+        # Get activatons of updated encoder
+        z = self.ae.encode(x)
+        
+        # Get batch data & mean (in prod code, this will use a data reader)
+        xbar_batch = t.mean(x, dim=0, keepdim=True)  # 1 x n vector
+        zbar_batch = t.mean(z, dim=0, keepdim=True)  # 1 x d vector
+        
+        # WA = C at optimum
+        A_Batch_dd = ((self.alpha_w + self.mu_dec) * t.eye(self.dict_size, device=z.device, dtype=z.dtype) + 
+                N_over_B * t.matmul(z.T, z) - 
+                self.num_total_tokens * N_over_betanuN * t.matmul(zbar_batch.T, zbar_batch))
+        
+        C_Batch_nd = (self.mu_dec * self.W_dec + 
+                N_over_B * t.matmul(x.T, z) - 
+                N_over_betanuN * t.matmul(self.num_total_tokens * xbar_batch.T + self.nu_dec * self.b_dec, zbar_batch))
+        
+        # Solve for W_dec: W_dec = C_Batch / A_Batch
+        A_reg = A_Batch_dd + tol * t.eye(self.dict_size, device=z.device, dtype=z.dtype)
+        self.W_dec = t.linalg.solve(A_reg.T, C_Batch_nd.T) # by repo convention, self.W_dec is of shape d, n, so equal t W_dec.T 
+        
+        # Optimal b
+        self.b_dec = (self.nu_dec / (self.beta_b + self.nu_dec + self.num_total_tokens) * self.b_dec + 
+                N_over_betanuN * (xbar_batch.T - t.matmul(self.W_dec.T, zbar_batch.T)))
+
+
+    def update(self, step, activations):
+
+        self.optimizer.zero_grad()
+        loss = self.loss(activations, step=step)
+        loss.backward()
+        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
+        self.optimizer.step()
+
+        self.update_decoder_analytically(x=activations)
+        self.scheduler.step()
+
+    @property
+    def config(self):
+        return {
+            "dict_class": "AutoEncoder",
+            "trainer_class": "StandardTrainerAprilUpdate",
+            "activation_dim": self.ae.activation_dim,
+            "dict_size": self.ae.dict_size,
+            "lr": self.lr,
+            "l1_penalty": self.l1_penalty,
+            "warmup_steps": self.warmup_steps,
+            "sparsity_warmup_steps": self.sparsity_warmup_steps,
+            "steps": self.steps,
+            "decay_start": self.decay_start,
+            "seed": self.seed,
+            "device": self.device,
+            "layer": self.layer,
+            "lm_name": self.lm_name,
+            "wandb_name": self.wandb_name,
+            "submodule_name": self.submodule_name,
+        }
+
+
+
+''' Prior implementation
+
+
+    def update_decoder_analytically_javier(self, x):
         """SINGLE-BATCH decoder update"""
         x = x.to(self.device)
         # Algorithm C.1, Line 1: Compute batchwise average x̄ = (1/N) Σ x^r
@@ -309,35 +468,4 @@ class SplinterpTrainer(SAETrainer):
         print(f"[DEBUG] Decoder weights norm: {t.norm(self.ae.decoder.weight).item():.6f}")
         print(f"[DEBUG] Decoder bias norm: {t.norm(self.ae.decoder.bias).item():.6f}")
         # Algorithm C.1, Line 23: end
-
-    def update(self, step, activations):
-
-        self.optimizer.zero_grad()
-        loss = self.loss(activations, step=step)
-        loss.backward()
-        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
-        self.optimizer.step()
-
-        self.update_decoder_analytically(x=activations)
-        self.scheduler.step()
-
-    @property
-    def config(self):
-        return {
-            "dict_class": "AutoEncoder",
-            "trainer_class": "StandardTrainerAprilUpdate",
-            "activation_dim": self.ae.activation_dim,
-            "dict_size": self.ae.dict_size,
-            "lr": self.lr,
-            "l1_penalty": self.l1_penalty,
-            "warmup_steps": self.warmup_steps,
-            "sparsity_warmup_steps": self.sparsity_warmup_steps,
-            "steps": self.steps,
-            "decay_start": self.decay_start,
-            "seed": self.seed,
-            "device": self.device,
-            "layer": self.layer,
-            "lm_name": self.lm_name,
-            "wandb_name": self.wandb_name,
-            "submodule_name": self.submodule_name,
-        }
+'''
