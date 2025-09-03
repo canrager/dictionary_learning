@@ -13,8 +13,15 @@ import torch as t
 
 # Load Configs
 env_config = EnvironmentConfig()
+<<<<<<< HEAD
 trainer_config_list = get_trainer_configs([StandardTrainerConfig(), SplinterpTrainerConfig()])
 print(f"Found {len(trainer_config_list)} TrainerConfigs in total.")
+=======
+trainer_config_list = get_trainer_configs(
+    [StandardTrainerConfig(), TopKTrainerConfig()]
+)
+print(f"Found {len(trainer_config_list)} trainer configs in total.")
+>>>>>>> 30a467c (set default backup bahavior to none)
 
 # Create activation buffer that loads precomputed activations from local
 local_cache = LocalCache(
@@ -42,5 +49,5 @@ trainSAE(
     normalize_activations=env_config.normalize_input_acts,
     verbose=False,
     autocast_dtype=env_config.dtype,
-    backup_steps=10,
+    backup_steps=env_config.backup_steps,
 )

@@ -682,7 +682,9 @@ class ActivaultS3ActivationBuffer:
     def __next__(self):
         with torch.no_grad():
             if (~self.read_mask).sum() < self.batch_size:
+                print(f"refreshing buffer")
                 self.refresh()
+                print(f"refreshed.")
 
             if self.states is None or self.states.shape[0] == 0:
                 raise StopIteration
