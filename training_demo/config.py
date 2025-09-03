@@ -48,7 +48,7 @@ class EnvironmentConfig:
         self.precomputed_act_save_dir = f"precomputed_activations_fineweb_50000000_tokens"
 
         # Activation Buffer
-        self.sae_batch_size: int = 100
+        self.sae_batch_size: int = 1
         self.device: str = "cuda:0"
         self.seed: int = 42
         self.steps = int(self.num_total_tokens / self.sae_batch_size)
@@ -130,9 +130,11 @@ class StandardTrainerConfig(BaseTrainerConfig):
         )
 
         self.dict_size: int | List[int] = self.activation_dim * 4
-        self.lr: float | List[float] = [1e-4, 3e-4]
+        # self.lr: float | List[float] = [1e-4, 3e-4]
+        self.lr: float | List[float] = 3e-4
         self.warmup_steps: int | List[int] = 10
-        self.l1_penalty: float | List[float] = [0.015, 0.06]
+        # self.l1_penalty: float | List[float] = [0.015, 0.06]
+        self.l1_penalty: float | List[float] = 0.06
         self.sparsity_warmup_steps: Optional[int] = 10
         self.seed: int | List[int] = 0
 
@@ -149,20 +151,25 @@ class SplinterpTrainerConfig(BaseTrainerConfig):
         )
 
         self.dict_size: int | List[int] = 10_000
-        self.lr: float | List[float] = [3e-4]
+        self.lr: float | List[float] = 3e-4
         self.warmup_steps: int | List[int] = 10
-        self.l1_penalty: float | List[float] = [0.015, 0.06]
+        # self.l1_penalty: float | List[float] = [0.015, 0.06]
+        self.l1_penalty: float | List[float] = 0.06
         self.sparsity_warmup_steps: Optional[int] = 10
         self.seed: int | List[int] = [0]
 
         self.mu_enc : float = 0.001
         self.nu_enc : float = 0.001
-        self.mu_dec : float = 0.001
-        self.nu_dec : float = 0.001
-        self.alpha_w : float = 1e-6
+        # self.mu_dec : float = 0.001
+        self.mu_dec : float = 1
+        # self.nu_dec : float = 0.001
+        self.nu_dec : float = 1
+        # self.alpha_w : float = 1e-6
+        self.alpha_w : float = 1
         self.beta_b : float = 1e-6
         self.decoder_reg : float = 1e-5
         self.prev_decoder_bias: Optional[t.Tensor] = None # Tensor values have difficulties with exporting to json!
+        self.num_total_steps = self.steps
 
 
 class TopKTrainerConfig(BaseTrainerConfig):

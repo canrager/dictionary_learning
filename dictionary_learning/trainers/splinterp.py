@@ -18,6 +18,7 @@ from dictionary_learning.dictionary import AutoEncoder
 
 ### Reference implementation
 
+
 def TopKActivationFunction(k, pre_relu_acts_BF):
     post_relu_feat_acts_BF = t.relu(pre_relu_acts_BF)
     tops_acts_BK, top_indices_BK = post_relu_feat_acts_BF.topk(k, sorted=False, dim=-1)
@@ -25,6 +26,7 @@ def TopKActivationFunction(k, pre_relu_acts_BF):
     buffer_BF = t.zeros_like(post_relu_feat_acts_BF)
     encoded_acts_BF = buffer_BF.scatter_(dim=-1, index=top_indices_BK, src=tops_acts_BK)
     return encoded_acts_BF
+
 
 class SplinterpTrainer(SAETrainer):
     """
@@ -39,7 +41,7 @@ class SplinterpTrainer(SAETrainer):
         dict_size: int,
         layer: int,
         lm_name: str,
-        num_total_tokens: int,
+        num_total_steps: int,
         dict_class=AutoEncoder,
         lr: float = 1e-3,
         l1_penalty: float = 1e-1,
@@ -59,9 +61,6 @@ class SplinterpTrainer(SAETrainer):
         beta_b: float = 1e-6,
         decoder_reg: float = 1e-5,
         prev_decoder_bias: Optional[t.Tensor] = None,
-
-        activation_fn: str = "relu", # "relu" or "topk"
-        k: Optional[int] = None, # Needs to be set for TopK activation function.
     ):
         super().__init__(seed)
 
@@ -93,7 +92,9 @@ class SplinterpTrainer(SAETrainer):
             self.device = device
         self.ae.to(self.device)
 
-        self.optimizer = t.optim.Adam(self.ae.encoder.parameters(), lr=lr) # NOTE Only encder is updated by SGD in the splinterp training process.
+        self.optimizer = t.optim.Adam(
+            self.ae.encoder.parameters(), lr=lr
+        )  # NOTE Only encder is updated by SGD in the splinterp training process.
 
         lr_fn = get_lr_schedule(
             steps,
@@ -117,7 +118,7 @@ class SplinterpTrainer(SAETrainer):
 
         self.prev_decoder_bias = prev_decoder_bias
 
-        self.num_total_tokens = num_total_tokens
+        self.num_total_steps = num_total_steps
 
     def loss(self, x, step: int, logging=False, **kwargs):
 
@@ -145,15 +146,15 @@ class SplinterpTrainer(SAETrainer):
                 },
             )
 
-    def LSsoln_onebatch2(self, x, tol=1e-8):
+    def LSsoln_onebatch2(self, x, tol=1e-2):
         """
         Uses batch data to approximate the A and C terms in the original PAM-SGD algorithm,
-        by viewing any sum over all r as N * mean (over all r) and replacing this with 
+        by viewing any sum over all r as N * mean (over all r) and replacing this with
         N * mean (over batch), and replacing all other means over all r with means over batch.
 
         Original Matlab code:
         --------
-        
+
         N_over_B = N/batch_size;
         N_over_betanuN = N/(beta + nu + N);
         % Get batch data & mean (in prod code, this will use a data reader)
@@ -168,7 +169,7 @@ class SplinterpTrainer(SAETrainer):
         W_dec = C_Batch / (A_Batch + tol * eye(d));
         % Optimal b
         b_dec = nu/(beta+nu+N) * old_b_dec + N_over_betanuN * (xbar_batch - W_dec * zbar_batch);
-        
+
         Parameters:
         -----------
         x : torch.Tensor
@@ -212,10 +213,10 @@ class SplinterpTrainer(SAETrainer):
         beta --> self.beta_b
         mu --> self.mu_w
         nu --> self.nu_w
-        old_W_dec --> self.W_dec (n x d matrix, but note: actual W_dec should be d x n)
-        old_b_dec --> self.b_dec (n x 1 vector)
+        old_W_dec --> self.ae.decoder.weight (n x d matrix, but note: actual W_dec should be d x n)
+        old_b_dec --> self.ae.bias (n x 1 vector)
         tol --> tol (passed as parameter, default 1e-8)
-        
+
         Returns:
         --------
         W_dec : torch.Tensor
@@ -226,33 +227,44 @@ class SplinterpTrainer(SAETrainer):
 
         # Set-up
         batch_size = x.shape[0]
-        N_over_B = self.num_total_tokens / batch_size
-        N_over_betanuN = self.num_total_tokens / (self.beta_b + self.nu_dec + self.num_total_tokens)
+        N_over_B = self.num_total_steps / batch_size
+        N_over_betanuN = self.num_total_steps / (self.beta_b + self.nu_dec + self.num_total_steps)
 
         # Get activatons of updated encoder
         z = self.ae.encode(x)
-        
+
         # Get batch data & mean (in prod code, this will use a data reader)
         xbar_batch = t.mean(x, dim=0, keepdim=True)  # 1 x n vector
         zbar_batch = t.mean(z, dim=0, keepdim=True)  # 1 x d vector
-        
-        # WA = C at optimum
-        A_Batch_dd = ((self.alpha_w + self.mu_dec) * t.eye(self.dict_size, device=z.device, dtype=z.dtype) + 
-                N_over_B * t.matmul(z.T, z) - 
-                self.num_total_tokens * N_over_betanuN * t.matmul(zbar_batch.T, zbar_batch))
-        
-        C_Batch_nd = (self.mu_dec * self.W_dec + 
-                N_over_B * t.matmul(x.T, z) - 
-                N_over_betanuN * t.matmul(self.num_total_tokens * xbar_batch.T + self.nu_dec * self.b_dec, zbar_batch))
-        
-        # Solve for W_dec: W_dec = C_Batch / A_Batch
-        A_reg = A_Batch_dd + tol * t.eye(self.dict_size, device=z.device, dtype=z.dtype)
-        self.W_dec = t.linalg.solve(A_reg.T, C_Batch_nd.T) # by repo convention, self.W_dec is of shape d, n, so equal t W_dec.T 
-        
-        # Optimal b
-        self.b_dec = (self.nu_dec / (self.beta_b + self.nu_dec + self.num_total_tokens) * self.b_dec + 
-                N_over_betanuN * (xbar_batch.T - t.matmul(self.W_dec.T, zbar_batch.T)))
 
+        # WA = C at optimum
+        A_Batch_dd = (
+            (self.alpha_w + self.mu_dec) * t.eye(self.dict_size, device=z.device, dtype=z.dtype)
+            + N_over_B * t.matmul(z.T, z)
+            - self.num_total_steps * N_over_betanuN * t.matmul(zbar_batch.T, zbar_batch)
+        )
+
+        C_Batch_nd = (
+            self.mu_dec * self.ae.decoder.weight
+            + N_over_B * t.matmul(x.T, z)
+            - N_over_betanuN
+            * t.matmul(self.num_total_steps * xbar_batch.T + self.nu_dec * self.ae.bias.unsqueeze(-1), zbar_batch)
+        )
+
+        # Solve for W_dec: W_dec = C_Batch / A_Batch
+        A_reg = A_Batch_dd + tol * t.eye(self.dict_size, device=C_Batch_nd.device, dtype=C_Batch_nd.dtype)
+        
+
+        W_dec_new = t.linalg.solve(A_reg.T, C_Batch_nd.T).T
+        self.ae.decoder.weight = nn.Parameter(W_dec_new)
+
+        # Optimal b, using tied bias here.
+        b_dec_new = self.nu_dec / (
+            self.beta_b + self.nu_dec + self.num_total_steps
+        ) * self.ae.bias + N_over_betanuN * (
+            xbar_batch.T - t.matmul(self.ae.decoder.weight, zbar_batch.T)
+        ).squeeze()
+        self.ae.bias = nn.Parameter(b_dec_new)
 
     def update(self, step, activations):
 
@@ -262,7 +274,7 @@ class SplinterpTrainer(SAETrainer):
         t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
         self.optimizer.step()
 
-        self.update_decoder_analytically(x=activations)
+        self.LSsoln_onebatch2(x=activations)
         self.scheduler.step()
 
     @property
@@ -285,7 +297,6 @@ class SplinterpTrainer(SAETrainer):
             "wandb_name": self.wandb_name,
             "submodule_name": self.submodule_name,
         }
-
 
 
 ''' Prior implementation
