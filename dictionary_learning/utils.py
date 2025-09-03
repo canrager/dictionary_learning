@@ -11,6 +11,8 @@ import torch as t
 import itertools
 import copy
 
+from nnsight import LanguageModel
+
 from .trainers.top_k import AutoEncoderTopK
 from .trainers.batch_top_k import BatchTopKSAE
 from .trainers.matryoshka_batch_top_k import MatryoshkaBatchTopKSAE
@@ -342,13 +344,21 @@ def truncate_model(model: AutoModelForCausalLM, layer: int):
 
     return model
 
-def get_model_tokenizer_submodule(env_config):
-
-    model = AutoModelForCausalLM.from_pretrained(
-        env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype
+def get_model_tokenizer_submodule(env_config, do_truncate_model=True, load_with_nnsight=False):
+    assert not (do_truncate_model and load_with_nnsight), "Cannot truncate nnsight models."
+    
+    if load_with_nnsight:
+        model = LanguageModel(
+        env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype, dispatch=True
     )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype
+        )
 
-    model = truncate_model(model, env_config.layer)
+    if do_truncate_model:
+        model = truncate_model(model, env_config.layer)
+
     tokenizer = AutoTokenizer.from_pretrained(env_config.llm_name)
     submodule = get_submodule(model, env_config.layer)
     return model, tokenizer, submodule

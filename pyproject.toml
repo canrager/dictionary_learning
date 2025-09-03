@@ -18,10 +18,9 @@ keywords = [
 ]
 classifiers = ["Topic :: Scientific/Engineering :: Artificial Intelligence"]
 dependencies = [
-    "circuitsvis>=1.43.2",
     "datasets>=2.18.0",
     "einops>=0.7.0",
-    "nnsight>=0.3.0,<0.4.0",
+    "nnsight>=0.5.2",
     "pandas>=2.2.1",
     "plotly>=5.18.0",
     "tqdm>=4.66.1",
@@ -29,6 +28,7 @@ dependencies = [
     "wandb>=0.12.0",
     "umap-learn>=0.5.6",
     "llvmlite>=0.40.0",
+    "boto3",
 ]
 
 [project.optional-dependencies]

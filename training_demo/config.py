@@ -28,7 +28,8 @@ from dictionary_learning.trainers.top_k import (
 class EnvironmentConfig:
     def __init__(self) -> None:
         # Text dataset
-        self.dataset_name: str = "HuggingFaceFW/fineweb"
+        # self.dataset_name: str = "HuggingFaceFW/fineweb"
+        self.dataset_name: str = "monology/pile-uncopyrighted"
         self.dataset_split: str = "train"
         self.num_total_tokens: int = 10_000_000 # <30mins on A6000
         self.num_tokens_per_file: int = 2_000_000  # Roughly 10GB at ctx_len
@@ -61,6 +62,11 @@ class EnvironmentConfig:
         self.use_wandb: bool = False 
         self.wandb_project_name: str = "splinterp_sae_sweep"
         self.log_steps: int = 100
+
+        # Evaluation
+        self.eval_num_sequences: int = 200
+        self.eval_batch_size: int = 100
+        self.eval_mean_metric_over_sequence: bool = False
 
     def relative_log_steps_to_absolute(self, relative_log_steps: t.Tensor):
         relative_log_steps = relative_log_steps.tolist()
