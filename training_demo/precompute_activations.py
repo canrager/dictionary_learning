@@ -65,6 +65,13 @@ def tokenized_batch(
     return encoding_BL
 
 
+def tokenized_batch_generator(dataset_name, split, tokenizer, batch_size, ctx_len, add_special_tokens=True, max_batches=10000):
+    text_generator = hf_dataset_to_generator(dataset_name, split, streaming=True)
+
+    for _ in range(max_batches):
+        yield tokenized_batch(tokenizer, text_generator, batch_size, ctx_len, add_special_tokens=True)
+
+
 def generate_metadata(save_dir, num_files):
     """Generate metadata.json file compatible with S3RCache."""
     first_states_path = os.path.join(
