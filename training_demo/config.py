@@ -31,7 +31,8 @@ class EnvironmentConfig:
         # self.dataset_name: str = "HuggingFaceFW/fineweb"
         self.dataset_name: str = "monology/pile-uncopyrighted"
         self.dataset_split: str = "train"
-        self.num_total_tokens: int = 10_000_000 # <30mins on A6000
+        # self.num_total_tokens: int = 10_000_000 # <30mins on A6000
+        self.num_total_tokens: int = 100_000_000 # <30mins on A6000
         self.num_tokens_per_file: int = 2_000_000  # Roughly 10GB at ctx_len
         self.ctx_len: int = 50
         self.add_special_tokens: bool = False
@@ -48,7 +49,7 @@ class EnvironmentConfig:
         self.precomputed_act_save_dir = f"precomputed_activations_fineweb_50000000_tokens"
 
         # Activation Buffer
-        self.sae_batch_size: int = 1
+        self.sae_batch_size: int = 2000
         self.device: str = "cuda:0"
         self.seed: int = 42
         self.steps = int(self.num_total_tokens / self.sae_batch_size)
@@ -161,13 +162,15 @@ class SplinterpTrainerConfig(BaseTrainerConfig):
         self.mu_enc : float = 0.001
         self.nu_enc : float = 0.001
         # self.mu_dec : float = 0.001
-        self.mu_dec : float = 1
+        self.mu_dec : float = 0
         # self.nu_dec : float = 0.001
-        self.nu_dec : float = 1
+        self.nu_dec : float = 0
         # self.alpha_w : float = 1e-6
-        self.alpha_w : float = 1
-        self.beta_b : float = 1e-6
-        self.decoder_reg : float = 1e-5
+        self.alpha_w : float = 0
+        # self.beta_b : float = 1e-6
+        self.beta_b : float = 0
+        # self.decoder_reg : float = 1e-5
+        self.decoder_reg : float = 0
         self.prev_decoder_bias: Optional[t.Tensor] = None # Tensor values have difficulties with exporting to json!
         self.num_total_steps = self.steps
 

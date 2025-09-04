@@ -13,7 +13,10 @@ import torch as t
 
 # Load Configs
 env_config = EnvironmentConfig()
-trainer_config_list = get_trainer_configs([StandardTrainerConfig(), SplinterpTrainerConfig()])
+trainer_config_list = get_trainer_configs([
+    StandardTrainerConfig(), 
+    SplinterpTrainerConfig()
+])
 print(f"Found {len(trainer_config_list)} TrainerConfigs in total.")
 # Create activation buffer that loads precomputed activations from local
 local_cache = LocalCache(

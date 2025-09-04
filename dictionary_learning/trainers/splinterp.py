@@ -146,7 +146,7 @@ class SplinterpTrainer(SAETrainer):
                 },
             )
 
-    def LSsoln_onebatch2(self, x, tol=1e-2):
+    def LSsoln_onebatch2(self, x, tol=1e-8):
         """
         Uses batch data to approximate the A and C terms in the original PAM-SGD algorithm,
         by viewing any sum over all r as N * mean (over all r) and replacing this with
@@ -228,6 +228,7 @@ class SplinterpTrainer(SAETrainer):
         # Set-up
         batch_size = x.shape[0]
         N_over_B = self.num_total_steps / batch_size
+        # N_over_B = 1
         N_over_betanuN = self.num_total_steps / (self.beta_b + self.nu_dec + self.num_total_steps)
 
         # Get activatons of updated encoder
@@ -237,33 +238,42 @@ class SplinterpTrainer(SAETrainer):
         xbar_batch = t.mean(x, dim=0, keepdim=True)  # 1 x n vector
         zbar_batch = t.mean(z, dim=0, keepdim=True)  # 1 x d vector
 
-        # WA = C at optimum
         A_Batch_dd = (
-            (self.alpha_w + self.mu_dec) * t.eye(self.dict_size, device=z.device, dtype=z.dtype)
-            + N_over_B * t.matmul(z.T, z)
-            - self.num_total_steps * N_over_betanuN * t.matmul(zbar_batch.T, zbar_batch)
+            (self.alpha_w + self.mu_dec) * t.eye(self.dict_size, device=z.device, dtype=z.dtype) / N_over_B
+            + t.matmul(z.T, z)
+            - batch_size * N_over_betanuN * t.matmul(zbar_batch.T, zbar_batch)
         )
 
         C_Batch_nd = (
-            self.mu_dec * self.ae.decoder.weight
-            + N_over_B * t.matmul(x.T, z)
+            self.mu_dec * self.ae.decoder.weight / N_over_B
+            + t.matmul(x.T, z)
             - N_over_betanuN
-            * t.matmul(self.num_total_steps * xbar_batch.T + self.nu_dec * self.ae.bias.unsqueeze(-1), zbar_batch)
+            * t.matmul(
+                batch_size * xbar_batch.T + self.nu_dec * self.ae.bias.unsqueeze(-1)/N_over_B,
+                zbar_batch,
+            )
         )
 
         # Solve for W_dec: W_dec = C_Batch / A_Batch
-        A_reg = A_Batch_dd + tol * t.eye(self.dict_size, device=C_Batch_nd.device, dtype=C_Batch_nd.dtype)
-        
+        A_reg = A_Batch_dd + tol * t.eye(
+            self.dict_size, device=C_Batch_nd.device, dtype=C_Batch_nd.dtype
+        )
 
+        # print(f'condition number of mat A:{t.linalg.cond(A_reg)}')
+        # print(f'condition number of mat C:{t.linalg.cond(C_Batch_nd)}') 
+
+
+        # L = t.linalg.cholesky(A_reg)
+        # W_dec_new = t.cholesky_solve(C_Batch_nd.T, L).T
         W_dec_new = t.linalg.solve(A_reg.T, C_Batch_nd.T).T
         self.ae.decoder.weight = nn.Parameter(W_dec_new)
 
         # Optimal b, using tied bias here.
-        b_dec_new = self.nu_dec / (
-            self.beta_b + self.nu_dec + self.num_total_steps
-        ) * self.ae.bias + N_over_betanuN * (
-            xbar_batch.T - t.matmul(self.ae.decoder.weight, zbar_batch.T)
-        ).squeeze()
+        b_dec_new = (
+            self.nu_dec / (self.beta_b + self.nu_dec + self.num_total_steps) * self.ae.bias
+            + N_over_betanuN
+            * (xbar_batch.T - t.matmul(self.ae.decoder.weight, zbar_batch.T)).squeeze()
+        )
         self.ae.bias = nn.Parameter(b_dec_new)
 
     def update(self, step, activations):
