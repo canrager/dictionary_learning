@@ -36,89 +36,55 @@ loss recovered
 
 
 
-def compute_l0_norm(f_BLD):
-    l0_BL = (f_BLD != 0).sum(dim=-1)
+def compute_l0_norm(f_BLS):
+    l0_BL = (f_BLS != 0).sum(dim=-1)
     return l0_BL
 
-def compute_mean_L1_norm(f):
-    return f.abs().sum(dim=-1).mean(dim=0)
+def compute_l1_norm(f_BLS):
+    l1_BL = f_BLS.abs().sum(dim=-1)
+    return l1_BL
 
-def compute_mse(x_hat, x):
-    diff_squared = (x_hat - x) ** 2
-    return diff_squared.sum(dim=-1).mean(dim=0)
+def compute_mse(x_hat_BLD, x_BLD):
+    """Note, that only meaning over batch dimension makes this MSE."""
+    squared_error_BLD = (x_hat_BLD - x_BLD) ** 2
+    sum_squared_error_BL = squared_error_BLD.sum(dim=-1)
+    return sum_squared_error_BL
 
-def compute_normalized_mse(x_hat, x):
-    """Identical to fraction of variance explained if mean_dims=[0]"""
-    mse = compute_mse(x_hat, x)
+def compute_normalized_mse(x_hat_BLD, x_BLD):
+    target_mean_LD = x_BLD.mean(dim=0) # Keep seperate means for positions L
+    target_centered_BLD  = x_BLD - target_mean_LD
+    target_variance_BLD  = target_centered_BLD  ** 2
+    target_mean_variance_BL = target_variance_BLD.sum(dim=-1, keepdim=True).mean(dim=0)
 
-    target_mean_LD = x.mean(dim=0) # Keep seperate means for positions L
-    target_centered = x - target_mean_LD
-    target_variance = target_centered ** 2
-    target_mean_variance = target_variance.sum(dim=-1).mean(dim=0)
+    sum_squared_error_BL = compute_mse(x_hat_BLD, x_BLD)
+    normalized_sum_squared_error_BL = sum_squared_error_BL / target_mean_variance_BL
+    return normalized_sum_squared_error_BL
 
-    return mse / target_mean_variance
+def compute_fraction_variance_explained(x_hat_BLD, x_BLD):
+    '''The only difference to normalized mse is that residual variances are centralized at before squaring in fvu.'''
+    total_variance_BL = t.var(x_BLD, dim=0, keepdim=True).sum(dim=-1)
+    residual_variance_BL = t.var(x_hat_BLD - x_BLD, dim=0, keepdim=True).sum(dim=-1)
+    fraction_variance_explained_BL = 1 - residual_variance_BL / total_variance_BL
+    return fraction_variance_explained_BL
 
-def compute_fraction_variance_explained(x_hat, x):
-    total_variance = t.var(x_hat, dim=0).sum(dim=-1)
-    residual_variance = t.var(x_hat - x, dim=0).sum(dim=-1)
-    return 1 - residual_variance / total_variance
+def compute_cosine_similarity(x_hat_BLD, x_BLD):
+    x_hat_normalized_BLD = x_hat_BLD / t.linalg.norm(x_hat_BLD, dim=-1, keepdim=True)
+    x_normed_BLD = x_BLD / t.linalg.norm(x_BLD, dim=-1, keepdim=True)
+    cosine_similarity_BL = (x_hat_normalized_BLD * x_normed_BLD).sum(dim=-1)
+    return cosine_similarity_BL
 
-def compute_cosine_similarity(x_hat, x):
-    f_normed = x_hat / t.linalg.norm(x_hat, dim=-1, keepdim=True)
-    x_normed = x / t.linalg.norm(x, dim=-1, keepdim=True)
-    return (f_normed * x_normed).sum(dim=-1).mean(dim=0)
+def compute_relative_reconstruction_bias(x_hat_BLD, x_BLD):
+    """Eq 10 from GatedSAE paper https://arxiv.org/pdf/2404.16014"""
+    x_hat_norm_squared_BL = t.linalg.norm(x_hat_BLD, dim=-1, ord=2) ** 2
+    x_times_x_hat_BL = (x_BLD * x_hat_BLD).sum(dim=-1)
+    relative_reconstruction_bias_BL = x_hat_norm_squared_BL / x_times_x_hat_BL
+    return relative_reconstruction_bias_BL
 
-def compute_relative_reconstruction_bias(x_hat, x):
-    x_hat_norm_squared = t.linalg.norm(x_hat, dim=-1, ord=2) ** 2
-    x_dot_x_hat = (x * x_hat).sum(dim=-1)
-    relative_reconstruction_bias = x_hat_norm_squared.mean() / x_dot_x_hat.mean()
-    return relative_reconstruction_bias
-
-def mean_across_seq_position(list_of_tensors):
-    """Compute_metric X functions above already compute mean over batch dim.
-    Therefore, dim=0 corresponds to seq pos here."""
-    return [a.mean(dim=0) for a in list_of_tensors]
-    
-
-@t.no_grad()
-def batch_compute_metrics(dictionary, activation_buffer, cfg: EnvironmentConfig):
-    mse, nmse, l1, l0, fve, cos_sim, rrb = [], [], [], [], [], [], []
-    num_batches = cfg.eval_num_sequences // cfg.eval_batch_size
-
-    for batch_idx in range(num_batches):
-        x = next(activation_buffer).to(cfg.device)
-        x_hat, f = dictionary(x, output_features=True)
-
-        l0.append(compute_mean_L0_norm(f))
-        l1.append(compute_mean_L1_norm(f))
-        mse.append(compute_mse(x_hat, x))
-        nmse.append(compute_normalized_mse(x_hat, x))
-        fve.append(compute_fraction_variance_explained(x_hat, x))
-        cos_sim.append(compute_cosine_similarity(x_hat, x))
-        rrb.append(compute_relative_reconstruction_bias(x_hat, x))
-
-    if cfg.eval_mean_metric_over_sequence:
-        l0 = mean_across_seq_position(l0)
-        l1 = mean_across_seq_position(l1)
-        mse = mean_across_seq_position(mse)
-        nmse = mean_across_seq_position(nmse)
-        fve = mean_across_seq_position(fve)
-        cos_sim = mean_across_seq_position(cos_sim)
-        rrb = mean_across_seq_position(rrb)
-
-    l0 = t.cat(l0, dim=0).mean(dim)
-
-    
-
-    
-    
-
-
-
-def compute_cross_entropy_loss(logits_BLD, tokens_BL):
+def compute_cross_entropy_loss(logits_BLV, tokens_BL):
     loss_fn = t.nn.CrossEntropyLoss()
-    loss = loss_fn(input=logits_BLD[:, :-1, :].flatten(0, 1), target=tokens_BL[:, 1:].flatten(0, 1))
-    return loss
+    loss_BL = loss_fn(input=logits_BLV[:, :-1, :].flatten(0, 1), target=tokens_BL[:, 1:].flatten(0, 1))
+    return loss_BL
+
 
 @t.no_grad()
 def compute_loss_recovered_single_batch(
@@ -161,47 +127,152 @@ def compute_loss_recovered_single_batch(
     logits_zero = logits_zero.detach().clone()
 
     # compute losses
-    loss_original = compute_cross_entropy_loss(logits_original, encoding_BL.input_ids)
-    loss_with_dictionary = compute_cross_entropy_loss(logits_with_dictionary, encoding_BL.input_ids)
-    loss_zero = compute_cross_entropy_loss(logits_zero, encoding_BL.input_ids)
-
-    loss_recovered = (loss_with_dictionary - loss_zero) / (loss_original - loss_zero)
+    loss_original_BL = compute_cross_entropy_loss(logits_original, encoding_BL.input_ids)
+    loss_with_dictionary_BL = compute_cross_entropy_loss(logits_with_dictionary, encoding_BL.input_ids)
+    loss_zero_BL = compute_cross_entropy_loss(logits_zero, encoding_BL.input_ids)
 
     del logits_original, logits_with_dictionary, logits_zero
     t.cuda.empty_cache()
 
-    return loss_recovered, loss_original, loss_with_dictionary, loss_zero
+    loss_recovered_BL = (loss_with_dictionary_BL - loss_zero_BL) / (loss_original_BL - loss_zero_BL)
 
+    return loss_recovered_BL.cpu(), loss_original_BL.cpu(), loss_with_dictionary_BL.cpu(), loss_zero_BL.cpu()
+
+
+def compute_mean_and_error(score_BL, aggregate_across_positions=True):
+    B, L = score_BL.shape
+
+    if aggregate_across_positions:
+        dims = [0, 1]
+        num_samples = B * L
+    else:
+        dims = [0]
+        num_samples = B
+
+    mean = score_BL.mean(dim=dims)
+    std = score_BL.std(dim=dims)
+    ci = 1.96 * std / (num_samples ** 0.5)
+
+    return mean, ci
+
+
+@t.no_grad()
+def batch_compute_statistics(dictionary, activation_buffer, cfg: EnvironmentConfig):
+    mse, nmse, l1, l0, fve, cos_sim, rrb = [], [], [], [], [], [], []
+    num_batches = cfg.eval_num_sequences // cfg.eval_batch_size
+    active_feature_count_S = t.zeros(dictionary.dict_size)
+
+    for batch_idx in range(num_batches):
+        x_BLD = next(activation_buffer).to(cfg.device)
+        x_hat_BLD, f_BLS = dictionary(x_BLD, output_features=True)
+
+        active_feature_count_S += (f_BLS != 0).float().sum(dim=(0,1))
+
+        l0.append(compute_l0_norm(f_BLS))
+        l1.append(compute_l1_norm(f_BLS))
+        mse.append(compute_mse(x_hat_BLD, x_BLD))
+        nmse.append(compute_normalized_mse(x_hat_BLD, x_BLD))
+        fve.append(compute_fraction_variance_explained(x_hat_BLD, x_BLD))
+        cos_sim.append(compute_cosine_similarity(x_hat_BLD, x_BLD))
+        rrb.append(compute_relative_reconstruction_bias(x_hat_BLD, x_BLD))
+
+    l0 = t.cat(l0, dim=0)
+    l1 = t.cat(l1, dim=0)
+    mse = t.cat(mse, dim=0)
+    nmse = t.cat(nmse, dim=0)
+    fve = t.cat(fve, dim=0)
+    cos_sim = t.cat(cos_sim, dim=0)
+    rrb = t.cat(rrb, dim=0)
+    
+
+    global_metrics = {
+        "fraction_alive_features": (active_feature_count_S != 0).float() / dictionary.dict_size
+    }
+
+    per_token_metrics = {
+        "l0": l0,
+        "l1": l1,
+        "mse": mse,
+        "normalized_mse": nmse,
+        "fraction_variance_explained": fve,
+        "cosine_similarity": cos_sim,
+        "relative_reconstruction_bias": rrb,
+    }
+
+    results = {}
+    results += global_metrics
+    results["mean"] = {}
+
+    for name, scores_BL in per_token_metrics.items():
+        mean, ci = compute_mean_and_error(scores_BL, aggregate_across_positions=True)
+        results["mean"] += {
+            f"{name}_mean": mean,
+            f"{name}_ci": ci
+        }
+
+    results["mean_per_position"] = {}
+
+    for name, scores_BL in per_token_metrics.items():
+        mean, ci = compute_mean_and_error(scores_BL, aggregate_across_positions=False)
+        results["mean_per_position"] += {
+            f"{name}_mean_pos": mean,
+            f"{name}_ci_pos": ci
+        }
+        
+    return results
+
+# Computing downstream CE loss recovered is more complex than all other metrics: requires loading a model and text.
+# We therefore treat it as separate functions for easy separability
 @t.no_grad()
 def batch_compute_loss_recovered(
     tokenized_batch_generator, model, submodule, dictionary, num_total_sequences, batch_size, cfg
 ):
+    ce_reco, ce_orig, ce_dict, ce_zero = [], [], [], []
     num_batches = num_total_sequences // batch_size
-    loss_recovered_B = t.zeros(num_batches)
-    loss_original_B = t.zeros(num_batches)
-    loss_with_dictionary_B = t.zeros(num_batches)
-    loss_zero_B = t.zeros(num_batches)
 
-    print(num_batches)
     for batch_idx in range(num_batches):
-        print(f'batch idx {batch_idx}')
         encoding_BL = next(tokenized_batch_generator).to(cfg.device)
         loss_recovered, loss_original, loss_with_dictionary, loss_zero = compute_loss_recovered_single_batch(
             encoding_BL, model, submodule, dictionary
         )
-        loss_recovered_B[batch_idx] = loss_recovered.mean(dim=0).cpu()
-        loss_original_B[batch_idx] = loss_original.mean(dim=0).cpu()
-        loss_with_dictionary_B[batch_idx] = loss_with_dictionary.mean(dim=0).cpu()
-        loss_zero_B[batch_idx] = loss_zero.mean(dim=0).cpu()
+        
+        ce_reco.append(loss_recovered)
+        ce_orig.append(loss_original)
+        ce_dict.append(loss_with_dictionary)
+        ce_zero.append(loss_zero)
 
-        t.cuda.empty_cache()
+    ce_reco = t.cat(ce_reco, dim=0)
+    ce_orig = t.cat(ce_orig, dim=0)
+    ce_dict = t.cat(ce_dict, dim=0)
+    ce_zero = t.cat(ce_zero, dim=0)
 
-    return {
-        "downstream_loss_recovered": loss_recovered_B.mean(dim=0).item(),
-        "downstream_loss_original": loss_original_B.mean(dim=0).item(),
-        "downstream_loss_with_dictionary": loss_with_dictionary_B.mean(dim=0).item(),
-        "downstream_loss_zero": loss_zero_B.mean(dim=0).item(),
+    per_token_metrics = {
+        "downstream_ce_loss_recovered": ce_reco,
+        "downstream_ce_loss_original": ce_orig,
+        "downstream_ce_loss_with_dict": ce_dict,
+        "downstream_ce_loss_zero": ce_zero,
     }
+
+    results = {}
+    results["mean"] = {}
+
+    for name, scores_BL in per_token_metrics.items():
+        mean, ci = compute_mean_and_error(scores_BL, aggregate_across_positions=True)
+        results["mean"] += {
+            f"{name}_mean": mean,
+            f"{name}_ci": ci
+        }
+
+    results["mean_per_position"] = {}
+
+    for name, scores_BL in per_token_metrics.items():
+        mean, ci = compute_mean_and_error(scores_BL, aggregate_across_positions=False)
+        results["mean_per_position"] += {
+            f"{name}_mean_pos": mean,
+            f"{name}_ci_pos": ci
+        }
+        
+    return results
 
 
 
