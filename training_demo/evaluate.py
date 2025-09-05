@@ -11,6 +11,8 @@ import torch as t
 import torch.nn.functional as F
 from collections import defaultdict
 from nnsight import LanguageModel
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 # Enlist all trainers in the trained_sae_save_dir
@@ -112,7 +114,9 @@ def compute_loss_recovered_single_batch(
     print(f"trace1")
     with model.trace(encoding_BL):
         logits_original = model.lm_head.output.save()
-    logits_original = logits_original.detach().clone()
+    logits_original_cpu = logits_original.cpu()
+    del logits_original
+    t.cuda.empty_cache()
     
     # intervene with `x_hat`
     print(f"trace2")
@@ -121,7 +125,9 @@ def compute_loss_recovered_single_batch(
         x_hat = dictionary(x)
         submodule.output[0][:] = x_hat
         logits_with_dictionary = model.lm_head.output.save()
-    logits_with_dictionary = logits_with_dictionary.detach().clone()
+    logits_with_dictionary_cpu = logits_with_dictionary.cpu()
+    del logits_with_dictionary
+    t.cuda.empty_cache()
 
     # logits when replacing component activations with zeros
     print(f"trace3")
@@ -129,20 +135,19 @@ def compute_loss_recovered_single_batch(
         x = submodule.output[0]
         submodule.output[0][:] = t.zeros_like(x)
         logits_zero = model.lm_head.output.save()
-    logits_zero = logits_zero.detach().clone()
-
-    # compute losses
-    input_ids = encoding_BL.input_ids.to(logits_original.device)
-    loss_original_BL = compute_cross_entropy_loss(logits_original, encoding_BL.input_ids)
-    loss_with_dictionary_BL = compute_cross_entropy_loss(logits_with_dictionary, encoding_BL.input_ids)
-    loss_zero_BL = compute_cross_entropy_loss(logits_zero, encoding_BL.input_ids)
-
-    del logits_original, logits_with_dictionary, logits_zero
+    logits_zero_cpu = logits_zero.cpu()
+    del logits_zero
     t.cuda.empty_cache()
 
+    # compute losses
+    print(f'computing losses')
+    input_ids = encoding_BL.input_ids.cpu()
+    loss_original_BL = compute_cross_entropy_loss(logits_original_cpu, input_ids)
+    loss_with_dictionary_BL = compute_cross_entropy_loss(logits_with_dictionary_cpu, input_ids)
+    loss_zero_BL = compute_cross_entropy_loss(logits_zero_cpu, input_ids)
     loss_recovered_BL = (loss_with_dictionary_BL - loss_zero_BL) / (loss_original_BL - loss_zero_BL)
 
-    return loss_recovered_BL.cpu(), loss_original_BL.cpu(), loss_with_dictionary_BL.cpu(), loss_zero_BL.cpu()
+    return loss_recovered_BL, loss_original_BL, loss_with_dictionary_BL, loss_zero_BL
 
 
 def compute_mean_and_error(score_BL, aggregate_across_positions=True):
@@ -159,7 +164,7 @@ def compute_mean_and_error(score_BL, aggregate_across_positions=True):
     std = score_BL.std(dim=dims)
     ci = 1.96 * std / (num_samples ** 0.5)
 
-    return mean, ci
+    return mean.tolist(), ci.tolist()
 
 
 @t.no_grad()
@@ -182,6 +187,8 @@ def batch_compute_statistics(dictionary, activation_buffer, cfg: BaseConfig):
         cos_sim.append(compute_cosine_similarity(x_hat_BLD, x_BLD))
         rrb.append(compute_relative_reconstruction_bias(x_hat_BLD, x_BLD))
 
+    frac_alive_features = (active_feature_count_S != 0).float().sum() / dictionary.dict_size
+
     l0 = t.cat(l0, dim=0)
     l1 = t.cat(l1, dim=0)
     mse = t.cat(mse, dim=0)
@@ -201,7 +208,7 @@ def batch_compute_statistics(dictionary, activation_buffer, cfg: BaseConfig):
     }
 
     miscellaneous_metrics = {
-        "fraction_alive_features": (active_feature_count_S != 0).float() / dictionary.dict_size
+        "fraction_alive_features": frac_alive_features.item()
     }
 
     results = {}
@@ -282,6 +289,88 @@ def batch_compute_loss_recovered(
     return results
 
 
+def plot_per_token_metrics(eval_results: dict, save_dir: str, omit_bos: bool = True):
+    """
+    Plot per-token metrics as a row of subplots with position on x-axis and metric on y-axis.
+    Shows mean values connected with lines and confidence intervals as shaded areas.
+    
+    Args:
+        eval_results: Dictionary containing evaluation results with 'mean_per_position' key
+        save_dir: Directory where the plot should be saved
+        omit_bos: Whether to omit the first token (BOS) from the plots
+    """
+    if 'mean_per_position' not in eval_results:
+        print("No per-position metrics found in eval_results")
+        return
+    
+    per_pos_data = eval_results['mean_per_position']
+    
+    # Extract metric names (remove '_mean_pos' suffix)
+    metric_names = []
+    for key in per_pos_data.keys():
+        if key.endswith('_mean_pos'):
+            metric_names.append(key[:-9])  # Remove '_mean_pos'
+    
+    if not metric_names:
+        print("No per-position metrics found")
+        return
+    
+    # Create subplots
+    n_metrics = len(metric_names)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 4))
+    
+    # Handle single metric case
+    if n_metrics == 1:
+        axes = [axes]
+    
+    for i, metric_name in enumerate(metric_names):
+        mean_key = f"{metric_name}_mean_pos"
+        ci_key = f"{metric_name}_ci_pos"
+        
+        if mean_key not in per_pos_data or ci_key not in per_pos_data:
+            print(f"Missing data for metric {metric_name}")
+            continue
+            
+        mean_values = per_pos_data[mean_key]
+        ci_values = per_pos_data[ci_key]
+        
+        # Apply omit_bos if requested
+        if omit_bos and len(mean_values) > 1:
+            mean_values = mean_values[1:]
+            ci_values = ci_values[1:]
+            positions = list(range(1, len(mean_values) + 1))
+        else:
+            positions = list(range(len(mean_values)))
+        
+        # Plot mean line with dots
+        axes[i].plot(positions, mean_values, 'o-', linewidth=2, markersize=4)
+        
+        # Plot confidence interval as shaded area
+        lower_bound = [m - c for m, c in zip(mean_values, ci_values)]
+        upper_bound = [m + c for m, c in zip(mean_values, ci_values)]
+        axes[i].fill_between(positions, lower_bound, upper_bound, alpha=0.3)
+        
+        # Set labels and title
+        axes[i].set_xlabel('Position')
+        axes[i].set_ylabel(metric_name.replace('_', ' ').title())
+        axes[i].set_title(f'{metric_name.replace("_", " ").title()} by Position')
+        axes[i].grid(True, alpha=0.3)
+    
+    # Add main title with trainer name and omit_bos setting
+    trainer_name = os.path.basename(save_dir)
+    fig.suptitle(f'{trainer_name} | omit_bos={omit_bos}', fontsize=14, y=1.02)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = os.path.join(save_dir, 'per_token_metrics.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Per-token metrics plot saved to: {plot_path}")
+    return plot_path
+
+
 
 def eval_saes(
     cfg: BaseConfig,
@@ -338,6 +427,9 @@ def eval_saes(
         with open(output_filename, "w") as f:
             json.dump(eval_results, f)
 
+        # Plot per-token metrics
+        plot_per_token_metrics(eval_results, ae_path, omit_bos=True)
+
         del dictionary
         t.cuda.empty_cache()
 
@@ -346,18 +438,6 @@ def eval_saes(
 
 def main():
     env_config = BaseConfig()
-
-    model, tokenizer, submodule = utils.get_model_tokenizer_submodule(
-        env_config, do_truncate_model=False, load_with_nnsight=True
-    )
-
-    token_generator = tokenized_batch_generator(
-        dataset_name=env_config.dataset_name,
-        split=env_config.dataset_split,
-        tokenizer=tokenizer,
-        batch_size=env_config.eval_batch_size,
-        ctx_len=env_config.ctx_len,
-    )
 
     local_cache = LocalCache(
         save_dir=env_config.precomputed_act_save_dir,
@@ -372,13 +452,31 @@ def main():
         do_flatten_batch_pos=False
     )
 
+    if env_config.do_downstream_ce_loss_evaluation:
+        model, tokenizer, submodule = utils.get_model_tokenizer_submodule(
+            env_config, do_truncate_model=False, load_with_nnsight=True
+        )
+
+        token_generator = tokenized_batch_generator(
+            dataset_name=env_config.dataset_name,
+            split=env_config.dataset_split,
+            tokenizer=tokenizer,
+            batch_size=env_config.eval_batch_size,
+            ctx_len=env_config.ctx_len,
+        )
+
+    else:
+        model = None
+        submodule = None
+        token_generator = None
+
     eval_saes(
         cfg=env_config,
         token_generator=token_generator,
         model=model,
         submodule=submodule,
         activation_buffer=activation_buffer,
-        do_downstream_ce_loss_evaluation=True,
+        do_downstream_ce_loss_evaluation=env_config.do_downstream_ce_loss_evaluation,
         overwrite_prev_results=True,
     )
 

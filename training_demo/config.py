@@ -73,6 +73,7 @@ class BaseConfig:
         self.eval_num_sequences: int = 200
         self.eval_batch_size: int = 10
         self.eval_mean_metric_over_sequence: bool = False
+        self.do_downstream_ce_loss_evaluation: bool = True
 
     def relative_log_steps_to_absolute(self, relative_log_steps: t.Tensor):
         relative_log_steps = relative_log_steps.tolist()
