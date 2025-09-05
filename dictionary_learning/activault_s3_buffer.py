@@ -668,13 +668,14 @@ class ActivaultS3ActivationBuffer:
         batch_size: int = 8192,
         device: str = "cpu",
         io: str = "out",
+        do_flatten_batch_pos: bool = True
     ):
         self.cache = iter(cache)  # Make sure it's an iterator
         self.batch_size = batch_size
         self.device = device
         self.io = io
 
-        self.do_flatten_batch_pos: bool = True
+        self.do_flatten_batch_pos = do_flatten_batch_pos
         self.states = None  # Shape: [N, D] if self.flatten_batch_pos, else [B, L, D]
         self.read_mask = None  # Shape: [N]
         self.refresh()  # Load the first batch
@@ -704,7 +705,6 @@ class ActivaultS3ActivationBuffer:
     def refresh(self):
         # Memory cleanup before loading new file
         self.states = None
-        self.read_mask()
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -719,10 +719,10 @@ class ActivaultS3ActivationBuffer:
 
         states = next_batch["states"].to(self.device)  # [B, L, D]
         if self.do_flatten_batch_pos:
-            flat_states = einops.rearrange(states, "b l d -> (b l) d").contiguous()
-        self.states = flat_states
+            states = einops.rearrange(states, "b l d -> (b l) d").contiguous()
+        self.states = states
         self.read_mask = torch.zeros(
-            flat_states.shape[0], dtype=torch.bool, device=self.device
+            states.shape[0], dtype=torch.bool, device=self.device
         )
 
     def close(self):

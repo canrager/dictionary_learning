@@ -294,6 +294,7 @@ def get_submodule(model: AutoModelForCausalLM, layer: int):
     elif (
         model.config.architectures[0] == "Qwen2ForCausalLM"
         or model.config.architectures[0] == "Gemma2ForCausalLM"
+        or model.config.architectures[0] == "LlamaForCausalLM"
     ):
         return model.model.layers[layer]
     else:
@@ -344,16 +345,16 @@ def truncate_model(model: AutoModelForCausalLM, layer: int):
 
     return model
 
-def get_model_tokenizer_submodule(env_config, do_truncate_model=True, load_with_nnsight=False):
+def get_model_tokenizer_submodule(env_config, do_truncate_model=False, load_with_nnsight=False):
     assert not (do_truncate_model and load_with_nnsight), "Cannot truncate nnsight models."
     
     if load_with_nnsight:
         model = LanguageModel(
-        env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype, dispatch=True
+        env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype, dispatch=True, cache_dir=env_config.hf_cache_dir
     )
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype
+            env_config.llm_name, device_map="auto", torch_dtype=env_config.dtype, cache_dir=env_config.hf_cache_dir
         )
 
     if do_truncate_model:

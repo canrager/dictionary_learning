@@ -1,4 +1,10 @@
-from training_demo.config import EnvironmentConfig, StandardTrainerConfig, TopKTrainerConfig, get_trainer_configs
+from training_demo.config import (
+    BaseConfig,
+    StandardTrainerConfig,
+    TopKTrainerConfig,
+    BatchTopKTrainerConfig,
+    get_trainer_configs,
+)
 from training_demo.precompute_activations import LocalCache
 from dictionary_learning.activault_s3_buffer import ActivaultS3ActivationBuffer
 from dictionary_learning.training import trainSAE
@@ -6,9 +12,9 @@ import torch as t
 
 
 # Load Configs
-env_config = EnvironmentConfig()
+env_config = BaseConfig()
 trainer_config_list = get_trainer_configs(
-    [StandardTrainerConfig(), TopKTrainerConfig()]
+    [StandardTrainerConfig(), TopKTrainerConfig(), BatchTopKTrainerConfig()]
 )
 print(f"Found {len(trainer_config_list)} trainer configs in total.")
 

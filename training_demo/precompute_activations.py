@@ -15,7 +15,7 @@ from dictionary_learning.activault_s3_buffer import (
     shuffle_megabatch_tokens,
     ActivaultS3ActivationBuffer,
 )
-from training_demo.config import EnvironmentConfig
+from training_demo.config import BaseConfig
 
 
 def tokenized_batch(
@@ -47,7 +47,6 @@ def tokenized_batch(
 
         # Only select texts longer or equal than ctx_len
         if sample_tok_L.input_ids.shape[1] < ctx_len:
-            print("Skipping this sample since it does not contain enough tokens to fill context.")
             continue
         else:
             batch.append(sample_tok_L)
@@ -65,21 +64,21 @@ def tokenized_batch(
     return encoding_BL
 
 
-def tokenized_batch_generator(dataset_name, split, tokenizer, batch_size, ctx_len, add_special_tokens=True, max_batches=10000):
+def tokenized_batch_generator(
+    dataset_name, split, tokenizer, batch_size, ctx_len, add_special_tokens=True, max_batches=10000
+):
     text_generator = hf_dataset_to_generator(dataset_name, split, streaming=True)
 
     for _ in range(max_batches):
-        yield tokenized_batch(tokenizer, text_generator, batch_size, ctx_len, add_special_tokens=True)
+        yield tokenized_batch(
+            tokenizer, text_generator, batch_size, ctx_len, add_special_tokens=True
+        )
 
 
 def generate_metadata(save_dir, num_files):
     """Generate metadata.json file compatible with S3RCache."""
-    first_states_path = os.path.join(
-        save_dir, f"states_{0:05d}_of_{num_files:05d}.pkl"
-    )
-    first_input_ids_path = os.path.join(
-        save_dir, f"input_ids_{0:05d}_of_{num_files:05d}.pkl"
-    )
+    first_states_path = os.path.join(save_dir, f"states_{0:05d}_of_{num_files:05d}.pkl")
+    first_input_ids_path = os.path.join(save_dir, f"input_ids_{0:05d}_of_{num_files:05d}.pkl")
 
     # Load first files to get tensor shapes and dtype
     with open(first_states_path, "rb") as f:
@@ -140,12 +139,12 @@ def precompute_activations(
     num_files = num_total_tokens // num_tokens_per_file
     num_batches = num_tokens_per_file // (llm_batch_size * ctx_len)
 
-
     for file_idx in range(num_files):
-        file_acts_nBLD = t.zeros(num_batches, llm_batch_size, ctx_len, submodule_dim, device=device, dtype=dtype)
+        file_acts_nBLD = t.zeros(
+            num_batches, llm_batch_size, ctx_len, submodule_dim, device=device, dtype=dtype
+        )
         file_inputs_nBL = t.zeros(num_batches, llm_batch_size, ctx_len, device=device, dtype=dtype)
-        for batch_idx in trange(num_batches, desc=f"Processing file {file_idx}/{num_files}"
-        ):
+        for batch_idx in trange(num_batches, desc=f"Processing file {file_idx}/{num_files}"):
             # Collect input token batch
             encoding_BL = tokenized_batch(
                 tokenizer=tokenizer,
@@ -164,17 +163,17 @@ def precompute_activations(
         # Save states and input_ids as separate files
         states_name = f"states_{file_idx:05d}_of_{num_files:05d}.pkl"
         input_ids_name = f"input_ids_{file_idx:05d}_of_{num_files:05d}.pkl"
-        
+
         states_path = os.path.join(save_dir, states_name)
         input_ids_path = os.path.join(save_dir, input_ids_name)
-        
+
         # Save states file
         with open(states_path, "wb") as f:
-            t.save(file_acts_nBLD.flatten(0,1).cpu(), f)
-            
+            t.save(file_acts_nBLD.flatten(0, 1).cpu(), f)
+
         # Save input_ids file
         with open(input_ids_path, "wb") as f:
-            t.save(file_inputs_nBL.flatten(0,1).cpu(), f)
+            t.save(file_inputs_nBL.flatten(0, 1).cpu(), f)
 
         del file_inputs_nBL, file_acts_nBLD
         gc.collect()
@@ -200,7 +199,7 @@ class LocalCache:
 
         # Find all states files (only load states for performance)
         self.states_file_paths = []
-        
+
         for filename in os.listdir(save_dir):
             if filename.startswith("states_") and filename.endswith(".pkl"):
                 self.states_file_paths.append(os.path.join(save_dir, filename))
@@ -218,10 +217,10 @@ class LocalCache:
 
         states_path = self.states_file_paths[self.current_file_idx]
         self.current_file_idx += 1
-        
+
         with open(states_path, "rb") as f:
             states = t.load(f)
-            
+
         return {"states": states}
 
     def finalize(self):
@@ -230,7 +229,7 @@ class LocalCache:
 
 
 if __name__ == "__main__":
-    env_config = EnvironmentConfig()
+    env_config = BaseConfig()
 
     model, tokenizer, submodule = get_model_tokenizer_submodule(env_config)
 
@@ -253,7 +252,7 @@ if __name__ == "__main__":
         add_special_tokens=env_config.add_special_tokens,
         save_dir=env_config.precomputed_act_save_dir,
         device=env_config.device,
-        dtype=env_config.dtype
+        dtype=env_config.dtype,
     )
 
     # Example usage of ActivaultS3ActivationBuffer with LocalCache
@@ -285,4 +284,6 @@ if __name__ == "__main__":
 
     t.cuda.synchronize()
     print(f"last line!")
-    sys.exit(0)  # Somehow not properly exiting the file automatically if using Huggingface Fineweb datatset. Works fine with other datasets.
+    sys.exit(
+        0
+    )  # Somehow not properly exiting the file automatically if using Huggingface Fineweb datatset. Works fine with other datasets.
