@@ -24,6 +24,7 @@ import time
 import warnings
 from multiprocessing import Process, Queue, Value
 from typing import Optional
+import gc
 
 import einops
 import aiohttp
@@ -33,6 +34,7 @@ import torch.nn as nn
 import multiprocessing as mp
 import warnings
 import logging
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -672,7 +674,8 @@ class ActivaultS3ActivationBuffer:
         self.device = device
         self.io = io
 
-        self.states = None  # Shape: [N, D]
+        self.do_flatten_batch_pos: bool = True
+        self.states = None  # Shape: [N, D] if self.flatten_batch_pos, else [B, L, D]
         self.read_mask = None  # Shape: [N]
         self.refresh()  # Load the first batch
 
@@ -699,6 +702,14 @@ class ActivaultS3ActivationBuffer:
             return self.states[selected]
 
     def refresh(self):
+        # Memory cleanup before loading new file
+        self.states = None
+        self.read_mask()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        
         try:
             next_batch = next(self.cache)  # dict with "states" key
         except StopIteration:
@@ -707,7 +718,8 @@ class ActivaultS3ActivationBuffer:
             return
 
         states = next_batch["states"].to(self.device)  # [B, L, D]
-        flat_states = einops.rearrange(states, "b l d -> (b l) d").contiguous()
+        if self.do_flatten_batch_pos:
+            flat_states = einops.rearrange(states, "b l d -> (b l) d").contiguous()
         self.states = flat_states
         self.read_mask = torch.zeros(
             flat_states.shape[0], dtype=torch.bool, device=self.device
